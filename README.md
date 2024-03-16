@@ -22,7 +22,7 @@ Piper Tray is a small system tray utility for Windows, that utilizes [Piper](htt
 - Download the latest version of Piper Tray from [releases](https://github.com/jame25/Piper-Tray/releases/).
 - Grab the latest Windows binary for Piper from here. Voice models are available [here](https://huggingface.co/rhasspy/piper-voices/tree/main).
 - Download the latest version of SoX from [here](https://sourceforge.net/projects/sox/files/sox/).
-- Extract all of the above into the same directory.
+- <b>Extract all of the above into the same directory</b>.
 
 ## Configuration:
 
