@@ -9,6 +9,10 @@ Piper Tray is a small system tray utility for Windows, that utilizes [Piper](htt
 * Control Piper TTS speech rate
 * Hotkey support (ALT + Q) to stop speech
 
+**Prerequisites**
+
+[.Net 8.0 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) is required to be installed.
+
 **Install:**
 
 - Download the latest version of Piper Tray from [releases](https://github.com/jame25/Piper-Tray/releases/).
