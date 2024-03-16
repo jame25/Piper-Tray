@@ -1,12 +1,13 @@
 <p align="center"> <img width="256" height="256" src="https://github.com/jame25/Piper-Tray/assets/13631646/95cf62c7-9248-4195-864b-57771d922bd6"></p>
 
 
-Piper Tray is a small system tray utility for Windows, that utilizes [Piper](https://github.com/rhasspy/piper) and [SoX](https://sourceforge.net/projects/sox/). It will read aloud the contents of your clipboard. You can stop the speech at any time either by using the 'stop' option, or via the hotkey (Alt + Q).
+Piper Tray is a small system tray utility for Windows, that utilizes [Piper](https://github.com/rhasspy/piper) and [SoX](https://sourceforge.net/projects/sox/). It will read aloud the contents of your clipboard. You can stop the speech at any time either by using the 'Stop Speech' option, or via the hotkey (Alt + Q).
 
 
 ## Features:
 
 * Reads clipboard contents aloud
+* Enable / Disable clipboard monitoring
 * Many voices to choose from
 * Change Piper TTS voice model
 * Control Piper TTS speech rate
