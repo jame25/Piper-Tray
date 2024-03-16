@@ -44,6 +44,8 @@ namespace ClipboardTTS
         private NotifyIcon trayIcon;
         private bool isRunning = true;
         private bool EnableLogging { get; set; }
+        private bool isMonitoringEnabled = true;
+
 
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -66,7 +68,9 @@ namespace ClipboardTTS
             trayIcon.Visible = true;
 
             ContextMenuStrip contextMenu = new ContextMenuStrip();
-            contextMenu.Items.Add("Stop", null, StopItem_Click);
+            ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
+            contextMenu.Items.Add(monitoringItem);
+            contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
             contextMenu.Items.Add("Exit", null, ExitItem_Click);
 
             trayIcon.ContextMenuStrip = contextMenu;
@@ -141,6 +145,14 @@ namespace ClipboardTTS
             // Store the logging setting in a class-level variable
             EnableLogging = enableLogging;
         }
+
+        private void MonitoringItem_Click(object sender, EventArgs e)
+        {
+            isMonitoringEnabled = !isMonitoringEnabled;
+            ToolStripMenuItem monitoringItem = (ToolStripMenuItem)sender;
+            monitoringItem.Text = isMonitoringEnabled ? "Disable Monitoring" : "Enable Monitoring";
+        }
+
         private void StopItem_Click(object sender, EventArgs e)
         {
             isRunning = false;
@@ -169,46 +181,49 @@ namespace ClipboardTTS
 
             while (isRunning)
             {
-                // Get the current clipboard text
-                string clipboardText = ClipboardService.GetText();
-
-                // Write the clipboard text to a temporary file
-                File.WriteAllText(TempFile, clipboardText);
-
-                // Get the current size of the temporary file
-                long currentSize = new FileInfo(TempFile).Length;
-
-                // Check if the file size has changed
-                if (currentSize != prevSize)
+                if (isMonitoringEnabled)
                 {
-                    prevSize = currentSize;
+                    // Get the current clipboard text
+                    string clipboardText = ClipboardService.GetText();
 
-                    // Wait a short time to ensure the clipboard data is stable
-                    Thread.Sleep(1000);
+                    // Write the clipboard text to a temporary file
+                    File.WriteAllText(TempFile, clipboardText);
 
-                    // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
-                    string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
-                    string soxCommand = $"{SoxPath} {SoxArgs}";
-                    Process piperProcess = new Process();
-                    piperProcess.StartInfo.FileName = "cmd.exe";
-                    piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
-                    piperProcess.StartInfo.UseShellExecute = false;
-                    piperProcess.StartInfo.CreateNoWindow = true;
-                    piperProcess.StartInfo.RedirectStandardError = true;
+                    // Get the current size of the temporary file
+                    long currentSize = new FileInfo(TempFile).Length;
 
-                    piperProcess.Start();
-                    string errorOutput = piperProcess.StandardError.ReadToEnd();
-                    piperProcess.WaitForExit();
-
-                    if (piperProcess.ExitCode != 0)
+                    // Check if the file size has changed
+                    if (currentSize != prevSize)
                     {
-                        // Log the error output
-                        File.AppendAllText("error.log", $"Piper TTS conversion failed:\n{errorOutput}\n");
-                    }
-                }
+                        prevSize = currentSize;
 
-                // Add a small delay to reduce CPU usage
-                Thread.Sleep(100);
+                        // Wait a short time to ensure the clipboard data is stable
+                        Thread.Sleep(1000);
+
+                        // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
+                        string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
+                        string soxCommand = $"{SoxPath} {SoxArgs}";
+                        Process piperProcess = new Process();
+                        piperProcess.StartInfo.FileName = "cmd.exe";
+                        piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
+                        piperProcess.StartInfo.UseShellExecute = false;
+                        piperProcess.StartInfo.CreateNoWindow = true;
+                        piperProcess.StartInfo.RedirectStandardError = true;
+
+                        piperProcess.Start();
+                        string errorOutput = piperProcess.StandardError.ReadToEnd();
+                        piperProcess.WaitForExit();
+
+                        if (piperProcess.ExitCode != 0)
+                        {
+                            // Log the error output
+                            File.AppendAllText("error.log", $"Piper TTS conversion failed:\n{errorOutput}\n");
+                        }
+                    }
+
+                    // Add a small delay to reduce CPU usage
+                    Thread.Sleep(100);
+                }
             }
         }
     }
