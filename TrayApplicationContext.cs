@@ -60,6 +60,15 @@ namespace ClipboardTTS
 
         public TrayApplicationContext()
         {
+            // Check if model exists in the application directory
+            string[] onnxFiles = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.onnx");
+            if (onnxFiles.Length == 0)
+            {
+                MessageBox.Show("No speech model files found. Please make sure you place the .onnx file and .json is in the same directory as the application.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+                return;
+            }
+
             LoadSettings();
 
             trayIcon = new NotifyIcon();
