@@ -197,11 +197,19 @@ namespace ClipboardTTS
 
         private void ExitItem_Click(object sender, EventArgs e)
         {
-
             isRunning = false;
+
+            // Kill the sox.exe process if it is running
+            Process[] soxProcesses = Process.GetProcessesByName("sox");
+            foreach (Process process in soxProcesses)
+            {
+                process.Kill();
+            }
+
             trayIcon.Visible = false;
             Application.Exit();
         }
+
 
         private void StartMonitoring()
         {
@@ -244,12 +252,6 @@ namespace ClipboardTTS
                         piperProcess.Start();
                         string errorOutput = piperProcess.StandardError.ReadToEnd();
                         piperProcess.WaitForExit();
-
-                        if (piperProcess.ExitCode != 0)
-                        {
-                            // Log the error output
-                            File.AppendAllText("error.log", $"Piper TTS conversion failed:\n{errorOutput}\n");
-                        }
 
                         // Update the tray icon to indicate idle state
                         UpdateTrayIcon(false);
