@@ -45,6 +45,7 @@ namespace ClipboardTTS
         private bool isRunning = true;
         private bool EnableLogging { get; set; }
         private bool isMonitoringEnabled = true;
+        private static Mutex mutex = null;
 
 
         [DllImport("user32.dll")]
@@ -63,6 +64,19 @@ namespace ClipboardTTS
 
         public TrayApplicationContext()
         {
+            const string appName = "PiperTray";
+            bool createdNew;
+
+            mutex = new Mutex(true, appName, out createdNew);
+
+            if (!createdNew)
+            {
+                // Another instance of the application is already running
+                MessageBox.Show("Another instance of the application is already running.", "Piper Tray", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+                return;
+            }
+
             // Check if model exists in the application directory
             string[] onnxFiles = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.onnx");
             if (onnxFiles.Length == 0)
