@@ -58,6 +58,9 @@ namespace ClipboardTTS
 
         private HotkeyWindow hotkeyWindow;
 
+        private Icon idleIcon;
+        private Icon activeIcon;
+
         public TrayApplicationContext()
         {
             // Check if model exists in the application directory
@@ -71,8 +74,11 @@ namespace ClipboardTTS
 
             LoadSettings();
 
+            idleIcon = new Icon("icon_idle.ico");
+            activeIcon = new Icon("icon_active.ico");
+
             trayIcon = new NotifyIcon();
-            trayIcon.Icon = new System.Drawing.Icon("icon.ico");
+            trayIcon.Icon = idleIcon;
             trayIcon.Text = "Piper Tray";
             trayIcon.Visible = true;
 
@@ -99,9 +105,22 @@ namespace ClipboardTTS
                 UnregisterHotKey(hotkeyWindow.Handle, HotkeyWindow.HotKeyId);
                 hotkeyWindow.Dispose();
                 trayIcon.Dispose();
+                idleIcon.Dispose();
+                activeIcon.Dispose();
             }
 
             base.Dispose(disposing);
+        }
+        private void UpdateTrayIcon(bool isActive)
+        {
+            if (isActive)
+            {
+                trayIcon.Icon = activeIcon;
+            }
+            else
+            {
+                trayIcon.Icon = idleIcon;
+            }
         }
 
         private void LoadSettings()
@@ -209,6 +228,9 @@ namespace ClipboardTTS
                         // Wait a short time to ensure the clipboard data is stable
                         Thread.Sleep(1000);
 
+                        // Update the tray icon to indicate active state
+                        UpdateTrayIcon(true);
+
                         // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
                         string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
                         string soxCommand = $"{SoxPath} {SoxArgs}";
@@ -228,6 +250,9 @@ namespace ClipboardTTS
                             // Log the error output
                             File.AppendAllText("error.log", $"Piper TTS conversion failed:\n{errorOutput}\n");
                         }
+
+                        // Update the tray icon to indicate idle state
+                        UpdateTrayIcon(false);
                     }
 
                     // Add a small delay to reduce CPU usage
