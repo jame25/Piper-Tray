@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using TextCopy;
 using System.Windows.Input;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace ClipboardTTS
 {
@@ -45,8 +46,8 @@ namespace ClipboardTTS
         private bool isRunning = true;
         private bool EnableLogging { get; set; }
         private bool isMonitoringEnabled = true;
+        private bool StartWithWindows { get; set; }
         private static Mutex mutex = null;
-
 
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -88,6 +89,12 @@ namespace ClipboardTTS
 
             LoadSettings();
 
+            // Set up the "start with windows" functionality
+            if (StartWithWindows)
+            {
+                SetStartWithWindows(true);
+            }
+
             idleIcon = new Icon("icon_idle.ico");
             activeIcon = new Icon("icon_active.ico");
 
@@ -100,6 +107,12 @@ namespace ClipboardTTS
             ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
             contextMenu.Items.Add(monitoringItem);
             contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
+
+            // Add the "Start with Windows" menu item with a checkbox
+            ToolStripMenuItem startWithWindowsItem = new ToolStripMenuItem("Start with Windows", null, StartWithWindowsItem_Click);
+            startWithWindowsItem.Checked = StartWithWindows;
+            contextMenu.Items.Add(startWithWindowsItem);
+
             contextMenu.Items.Add("Exit", null, ExitItem_Click);
 
             trayIcon.ContextMenuStrip = contextMenu;
@@ -125,6 +138,7 @@ namespace ClipboardTTS
 
             base.Dispose(disposing);
         }
+
         private void UpdateTrayIcon(bool isActive)
         {
             if (isActive)
@@ -140,6 +154,7 @@ namespace ClipboardTTS
         private void LoadSettings()
         {
             bool enableLogging = false; // Default value (logging disabled)
+            bool startWithWindows = false; // Default value (start with windows disabled)
 
             if (File.Exists(SettingsFile))
             {
@@ -166,6 +181,15 @@ namespace ClipboardTTS
                             enableLogging = value != 0;
                         }
                     }
+                    else if (line.StartsWith("startwithwindows="))
+                    {
+                        string startWithWindowsValue = line.Substring("startwithwindows=".Length).Trim();
+
+                        if (int.TryParse(startWithWindowsValue, out int value))
+                        {
+                            startWithWindows = value != 0;
+                        }
+                    }
                 }
 
                 if (!string.IsNullOrEmpty(model) && !string.IsNullOrEmpty(speed))
@@ -186,7 +210,36 @@ namespace ClipboardTTS
 
             // Store the logging setting in a class-level variable
             EnableLogging = enableLogging;
+
+            // Store the start with windows setting in a class-level variable
+            StartWithWindows = startWithWindows;
         }
+
+        private void SetStartWithWindows(bool enable)
+        {
+            using (RegistryKey registryKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+            {
+                if (enable)
+                {
+                    registryKey.SetValue("PiperTray", Application.ExecutablePath);
+                }
+                else
+                {
+                    registryKey.DeleteValue("PiperTray", false);
+                }
+            }
+        }
+
+        private void StartWithWindowsItem_Click(object sender, EventArgs e)
+        {
+            StartWithWindows = !StartWithWindows;
+            ToolStripMenuItem startWithWindowsItem = (ToolStripMenuItem)sender;
+            startWithWindowsItem.Checked = StartWithWindows;
+
+            SetStartWithWindows(StartWithWindows);
+            SaveSettings();
+        }
+
 
         private void MonitoringItem_Click(object sender, EventArgs e)
         {
@@ -224,6 +277,19 @@ namespace ClipboardTTS
             Application.Exit();
         }
 
+        private void SaveSettings()
+        {
+            string[] lines = File.ReadAllLines(SettingsFile);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].StartsWith("startwithwindows="))
+                {
+                    lines[i] = $"startwithwindows={Convert.ToInt32(StartWithWindows)}";
+                    break;
+                }
+            }
+            File.WriteAllLines(SettingsFile, lines);
+        }
 
         private void StartMonitoring()
         {
