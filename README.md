@@ -12,6 +12,7 @@ Piper Tray is a small system tray utility for Windows, that utilizes [Piper](htt
 * Change Piper TTS voice model
 * Control Piper TTS speech rate
 * Hotkey support (ALT + Q) to stop speech
+* Prevent keywords being read (ignore.dict)  
 
 ## Prerequisites:
 
