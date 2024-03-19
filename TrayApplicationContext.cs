@@ -316,6 +316,13 @@ namespace ClipboardTTS
 
                         // Update the tray icon to indicate idle state
                         UpdateTrayIcon(false);
+
+                        // Clear the clipboard after a short delay
+                        Task.Run(async () =>
+                        {
+                            await Task.Delay(1000); // Adjust the delay as needed
+                            System.Windows.Forms.Clipboard.Clear();
+                        });
                     }
                 }
 
