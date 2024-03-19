@@ -14,6 +14,13 @@ namespace ClipboardTTS
         private const int WM_HOTKEY = 0x0312;
         public const int HotKeyId = 1; // Make HotKeyId public
 
+        private TrayApplicationContext context;
+
+        public HotkeyWindow(TrayApplicationContext context)
+        {
+            this.context = context;
+        }
+
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotKeyId)
@@ -26,6 +33,9 @@ namespace ClipboardTTS
                     CreateNoWindow = true,
                     UseShellExecute = false
                 }).WaitForExit();
+
+                // Restart the monitoring process
+                context.RestartMonitoring();
             }
 
             base.WndProc(ref m);
@@ -61,8 +71,9 @@ namespace ClipboardTTS
 
         private Icon idleIcon;
         private Icon activeIcon;
-        private CancellationTokenSource monitoringCancellationTokenSource;
+        private Thread monitoringThread;
         public TrayApplicationContext()
+
         {
             const string appName = "PiperTray";
             bool createdNew;
@@ -88,8 +99,8 @@ namespace ClipboardTTS
 
             LoadSettings();
 
-            idleIcon = new Icon("icon_idle.ico");
-            activeIcon = new Icon("icon_active.ico");
+            idleIcon = new Icon("idle.ico");
+            activeIcon = new Icon("active.ico");
 
             trayIcon = new NotifyIcon();
             trayIcon.Icon = idleIcon;
@@ -97,27 +108,43 @@ namespace ClipboardTTS
             trayIcon.Visible = true;
 
             ContextMenuStrip contextMenu = new ContextMenuStrip();
-            ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, StartMonitoringButton_Click);
+            ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
             contextMenu.Items.Add(monitoringItem);
             contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
             contextMenu.Items.Add("Exit", null, ExitItem_Click);
 
             trayIcon.ContextMenuStrip = contextMenu;
 
-            hotkeyWindow = new HotkeyWindow();
+            hotkeyWindow = new HotkeyWindow(this);
             RegisterHotKey(hotkeyWindow.Handle, HotkeyWindow.HotKeyId, MOD_ALT, VK_Q);
 
+            // Clear the clipboard at launch
+            System.Windows.Forms.Clipboard.Clear();
+
             // Start monitoring the clipboard automatically
-            monitoringCancellationTokenSource = new CancellationTokenSource();
-            Task.Run(() => StartMonitoringAsync(CancellationToken.None));
+            monitoringThread = new Thread(StartMonitoring);
+            monitoringThread.Start();
+        }
+
+        public void RestartMonitoring()
+        {
+            // Stop the current monitoring thread
+            isRunning = false;
+            monitoringThread.Join();
+
+            // Skip the current clipboard content
+            bool skipCurrentClipboard = true;
+
+            // Start a new monitoring thread
+            isRunning = true;
+            monitoringThread = new Thread(StartMonitoring);
+            monitoringThread.Start();
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                monitoringCancellationTokenSource.Cancel();
-                monitoringCancellationTokenSource.Dispose();
                 UnregisterHotKey(hotkeyWindow.Handle, HotkeyWindow.HotKeyId);
                 hotkeyWindow.Dispose();
                 trayIcon.Dispose();
@@ -190,12 +217,23 @@ namespace ClipboardTTS
             EnableLogging = enableLogging;
         }
 
-        private async void StartMonitoringButton_Click(object sender, EventArgs e)
+        private void MonitoringItem_Click(object sender, EventArgs e)
         {
-            CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
-            await StartMonitoringAsync(cancellationTokenSource.Token);
-        }
+            isMonitoringEnabled = !isMonitoringEnabled;
+            ToolStripMenuItem monitoringItem = (ToolStripMenuItem)sender;
+            monitoringItem.Text = isMonitoringEnabled ? "Disable Monitoring" : "Enable Monitoring";
 
+            if (isMonitoringEnabled)
+            {
+                // Clear the clipboard when enabling monitoring
+                System.Windows.Forms.Clipboard.Clear();
+            }
+            else
+            {
+                // Clear the clipboard when disabling monitoring
+                System.Windows.Forms.Clipboard.Clear();
+            }
+        }
 
         private void StopItem_Click(object sender, EventArgs e)
         {
@@ -209,6 +247,12 @@ namespace ClipboardTTS
                 CreateNoWindow = true,
                 UseShellExecute = false
             }).WaitForExit();
+
+            // Clear the clipboard
+            System.Windows.Forms.Clipboard.Clear();
+
+            // Restart the monitoring process
+            RestartMonitoring();
         }
 
         private void ExitItem_Click(object sender, EventArgs e)
@@ -227,31 +271,31 @@ namespace ClipboardTTS
         }
 
 
-        private async Task StartMonitoringAsync(CancellationToken cancellationToken)
+        private void StartMonitoring()
         {
-            string prevClipboardText = string.Empty;
+            long prevSize = 0;
+            bool skipCurrentClipboard = false;
 
-            while (!cancellationToken.IsCancellationRequested)
+            while (isRunning)
             {
                 if (isMonitoringEnabled)
                 {
                     // Get the current clipboard text
                     string clipboardText = ClipboardService.GetText();
 
-                    // Check if the clipboard text has changed
-                    if (clipboardText != prevClipboardText)
-                    {
-                        prevClipboardText = clipboardText;
+                    // Write the clipboard text to a temporary file
+                    File.WriteAllText(TempFile, clipboardText);
 
-                        // Disposing of FileStream and StreamWriter
-                        using (FileStream fileStream = new FileStream(TempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
-                        using (StreamWriter streamWriter = new StreamWriter(fileStream))
-                        {
-                            await streamWriter.WriteAsync(clipboardText);
-                        }
+                    // Get the current size of the temporary file
+                    long currentSize = new FileInfo(TempFile).Length;
+
+                    // Check if the file size has changed
+                    if (currentSize != prevSize && !skipCurrentClipboard)
+                    {
+                        prevSize = currentSize;
 
                         // Wait a short time to ensure the clipboard data is stable
-                        await Task.Delay(1000, cancellationToken);
+                        Thread.Sleep(1000);
 
                         // Update the tray icon to indicate active state
                         UpdateTrayIcon(true);
@@ -259,20 +303,16 @@ namespace ClipboardTTS
                         // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
                         string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
                         string soxCommand = $"{SoxPath} {SoxArgs}";
+                        Process piperProcess = new Process();
+                        piperProcess.StartInfo.FileName = "cmd.exe";
+                        piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
+                        piperProcess.StartInfo.UseShellExecute = false;
+                        piperProcess.StartInfo.CreateNoWindow = true;
+                        piperProcess.StartInfo.RedirectStandardError = true;
 
-                        // Disposing of Process objects
-                        using (Process piperProcess = new Process())
-                        {
-                            piperProcess.StartInfo.FileName = "cmd.exe";
-                            piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
-                            piperProcess.StartInfo.UseShellExecute = false;
-                            piperProcess.StartInfo.CreateNoWindow = true;
-                            piperProcess.StartInfo.RedirectStandardError = true;
-
-                            piperProcess.Start();
-                            string errorOutput = await piperProcess.StandardError.ReadToEndAsync();
-                            await piperProcess.WaitForExitAsync(cancellationToken);
-                        }
+                        piperProcess.Start();
+                        string errorOutput = piperProcess.StandardError.ReadToEnd();
+                        piperProcess.WaitForExit();
 
                         // Update the tray icon to indicate idle state
                         UpdateTrayIcon(false);
@@ -280,7 +320,7 @@ namespace ClipboardTTS
                 }
 
                 // Add a small delay to reduce CPU usage
-                await Task.Delay(100, cancellationToken);
+                Thread.Sleep(100);
             }
         }
     }
