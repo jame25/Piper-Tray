@@ -3,7 +3,7 @@ using System.Windows.Forms;
 
 namespace ClipboardTTS
 {
-    static class Program
+    public static class Program
     {
         [STAThread]
         static void Main()
