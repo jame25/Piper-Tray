@@ -115,7 +115,7 @@ namespace ClipboardTTS
                 aboutForm.MaximizeBox = false;
                 aboutForm.MinimizeBox = false;
                 aboutForm.StartPosition = FormStartPosition.CenterScreen;
-                aboutForm.ClientSize = new Size(350, 150);
+                aboutForm.ClientSize = new Size(350, 180);
 
                 PictureBox logoPictureBox = new PictureBox();
                 logoPictureBox.Image = new Icon("idle.ico").ToBitmap();
