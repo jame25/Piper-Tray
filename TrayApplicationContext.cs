@@ -105,7 +105,7 @@ namespace ClipboardTTS
         private void ShowAboutWindow()
         {
             string version = "1.1.1";
-            string message = $"Piper Tray\nVersion: {version}\n\nDeveloped by jame25";
+            string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
             using (Form aboutForm = new Form())
