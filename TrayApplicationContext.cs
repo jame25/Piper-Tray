@@ -7,7 +7,7 @@ using TextCopy;
 using System.Windows.Input;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Linq.Expressions;
+using System.Linq;
 using System.Windows.Forms.PropertyGridInternal;
 
 
@@ -101,6 +101,54 @@ namespace ClipboardTTS
         private NotifyIcon notifyIcon;
         private Thread monitoringThread;
         private System.Threading.SynchronizationContext _syncContext;
+
+        private void ShowAboutWindow()
+        {
+            string version = "1.1.1";
+            string message = $"Piper Tray\nVersion: {version}\n\nDeveloped by jame25";
+            string url = "https://github.com/jame25/Piper-Tray";
+
+            using (Form aboutForm = new Form())
+            {
+                aboutForm.Text = "About Piper Tray";
+                aboutForm.FormBorderStyle = FormBorderStyle.FixedSingle;
+                aboutForm.MaximizeBox = false;
+                aboutForm.MinimizeBox = false;
+                aboutForm.StartPosition = FormStartPosition.CenterScreen;
+                aboutForm.ClientSize = new Size(350, 150);
+
+                PictureBox logoPictureBox = new PictureBox();
+                logoPictureBox.Image = new Icon("idle.ico").ToBitmap();
+                logoPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
+                logoPictureBox.Location = new Point(10, 10);
+                logoPictureBox.Size = new Size(64, 64);
+                aboutForm.Controls.Add(logoPictureBox);
+
+                Label messageLabel = new Label();
+                messageLabel.Text = message;
+                messageLabel.Location = new Point(90, 10);
+                messageLabel.AutoSize = true;
+                aboutForm.Controls.Add(messageLabel);
+
+                LinkLabel linkLabel = new LinkLabel();
+                linkLabel.Text = url;
+                linkLabel.Location = new Point(90, messageLabel.Bottom + 10);
+                linkLabel.AutoSize = true;
+                linkLabel.LinkClicked += (sender, e) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                aboutForm.Controls.Add(linkLabel);
+
+                Button okButton = new Button();
+                okButton.Text = "OK";
+                okButton.DialogResult = DialogResult.OK;
+                okButton.Location = new Point(aboutForm.ClientSize.Width - 80, aboutForm.ClientSize.Height - 40);
+                aboutForm.Controls.Add(okButton);
+
+                aboutForm.AcceptButton = okButton;
+
+                aboutForm.ShowDialog();
+            }
+        }
+
         public TrayApplicationContext()
         {
             try
@@ -126,7 +174,6 @@ namespace ClipboardTTS
                     Application.Exit();
                     return;
                 }
-
 
                 LoadSettings();
 
@@ -155,6 +202,7 @@ namespace ClipboardTTS
                 ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
                 contextMenu.Items.Add(monitoringItem);
                 contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
+                contextMenu.Items.Add("About", null, AboutItem_Click);
                 contextMenu.Items.Add("Exit", null, ExitItem_Click);
 
                 trayIcon.ContextMenuStrip = contextMenu;
@@ -305,6 +353,11 @@ namespace ClipboardTTS
             {
                 UpdateTrayIcon(ActivityState.Idle);
             }, null);
+        }
+
+        private void AboutItem_Click(object sender, EventArgs e)
+        {
+            ShowAboutWindow();
         }
 
 
