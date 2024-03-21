@@ -13,6 +13,33 @@ using System.Windows.Forms.PropertyGridInternal;
 
 namespace ClipboardTTS
 {
+    public static class ProcessHelper
+    {
+        public static void TerminateProcesses(string processName)
+        {
+            Process[] processes = Process.GetProcessesByName(processName);
+            foreach (Process process in processes)
+            {
+                try
+                {
+                    process.CloseMainWindow();
+                }
+                catch (Exception ex)
+                {
+                    // Log any exceptions that occur while killing the process
+                    LogError(ex);
+                }
+            }
+        }
+
+        private static void LogError(Exception ex)
+        {
+            string logFilePath = "error.log";
+            string errorMessage = $"[{DateTime.Now}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}{ex.StackTrace}{Environment.NewLine}";
+
+            File.AppendAllText(logFilePath, errorMessage);
+        }
+    }
     public class HotkeyWindow : Form
     {
         private const int WM_HOTKEY = 0x0312;
@@ -29,14 +56,9 @@ namespace ClipboardTTS
         {
             if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotKeyId)
             {
-                // Hotkey pressed, execute the command
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/C taskkill /F /IM sox.exe",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                }).WaitForExit();
+                // Hotkey pressed, execute the command to kill both sox.exe and piper.exe
+                ProcessHelper.TerminateProcesses("sox");
+                ProcessHelper.TerminateProcesses("piper");
 
                 // Restart the monitoring process
                 context.RestartMonitoring();
@@ -48,6 +70,7 @@ namespace ClipboardTTS
 
     public class TrayApplicationContext : ApplicationContext
     {
+        private bool _isFirstClipboardChange = true;
         private const string TempFile = "clipboard_temp.txt";
         private const string SoxPath = "sox.exe";
         private const string PiperPath = "piper.exe";
@@ -104,7 +127,21 @@ namespace ClipboardTTS
                     return;
                 }
 
+
                 LoadSettings();
+
+                // Clear the clipboard_temp.txt file at startup
+                try
+                {
+                    if (File.Exists(TempFile))
+                    {
+                        File.WriteAllText(TempFile, string.Empty);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex);
+                }
 
                 idleIcon = new Icon("idle.ico");
                 activeIcon = new Icon("active.ico");
@@ -124,9 +161,6 @@ namespace ClipboardTTS
 
                 hotkeyWindow = new HotkeyWindow(this);
                 RegisterHotKey(hotkeyWindow.Handle, HotkeyWindow.HotKeyId, MOD_ALT, VK_Q);
-
-                // Clear the clipboard at launch
-                System.Windows.Forms.Clipboard.Clear();
 
                 _syncContext = System.Threading.SynchronizationContext.Current;
 
@@ -240,29 +274,31 @@ namespace ClipboardTTS
 
             if (isMonitoringEnabled)
             {
-                // Clear the clipboard when enabling monitoring
-                System.Windows.Forms.Clipboard.Clear();
-            }
-            else
-            {
-                // Clear the clipboard when disabling monitoring
-                System.Windows.Forms.Clipboard.Clear();
+                // Clear the clipboard_temp.txt file when enabling monitoring
+                try
+                {
+                    File.WriteAllText(TempFile, string.Empty);
+                }
+                catch (IOException ex)
+                {
+                    // Handle the exception if the file is in use or cannot be accessed
+                    LogError(ex);
+                    // You can choose to display an error message to the user or take appropriate action
+                }
             }
         }
 
+
         private void StopItem_Click(object sender, EventArgs e)
         {
-            // Kill the sox.exe process
+            // Kill the sox.exe adn piper.exe process
             Process.Start(new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = "/C taskkill /F /IM sox.exe",
+                Arguments = "/C taskkill /F /IM sox.exe /IM piper.exe",
                 CreateNoWindow = true,
                 UseShellExecute = false
             }).WaitForExit();
-
-            // Clear the clipboard
-            System.Windows.Forms.Clipboard.Clear();
 
             // Update the tray icon to indicate idle state
             _syncContext.Post(_ =>
@@ -276,11 +312,25 @@ namespace ClipboardTTS
         {
             isRunning = false;
 
-            // Kill the sox.exe process if it is running
-            Process[] soxProcesses = Process.GetProcessesByName("sox");
-            foreach (Process process in soxProcesses)
+            // Kill the sox.exe and piper.exe processes if they are running
+            Process.Start(new ProcessStartInfo
             {
-                process.Kill();
+                FileName = "cmd.exe",
+                Arguments = "/C taskkill /F /IM sox.exe /IM piper.exe",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            }).WaitForExit();
+
+            // Clear the temporary file when exiting
+            try
+            {
+                File.WriteAllText(TempFile, string.Empty);
+            }
+            catch (IOException ex)
+            {
+                // Handle the exception if the file is in use or cannot be accessed
+                LogError(ex);
+                // You can choose to display an error message to the user or take appropriate action
             }
 
             trayIcon.Visible = false;
@@ -301,8 +351,7 @@ namespace ClipboardTTS
         {
             try
             {
-                long prevSize = 0;
-                bool skipCurrentClipboard = false;
+                string prevClipboardText = string.Empty;
 
                 // Read the ignore dictionary file
                 string[] ignoreWords = File.Exists("ignore.dict") ? File.ReadAllLines("ignore.dict") : new string[0];
@@ -314,13 +363,15 @@ namespace ClipboardTTS
                         // Get the current clipboard text
                         string clipboardText = ClipboardService.GetText();
 
-                        // Check if the clipboard text is null or empty
-                        if (string.IsNullOrEmpty(clipboardText))
+                        // Check if the clipboard text is null, empty, or unchanged
+                        if (string.IsNullOrEmpty(clipboardText) || clipboardText == prevClipboardText)
                         {
-                            // Skip processing if the clipboard text is null or empty
                             await Task.Delay(100);
                             continue;
                         }
+
+                        // Update the previous clipboard text
+                        prevClipboardText = clipboardText;
 
                         // Split the clipboard text into words
                         string[] words = Regex.Split(clipboardText, @"\s+");
@@ -356,66 +407,59 @@ namespace ClipboardTTS
                             continue; // Skip further processing for the current iteration
                         }
 
-                        // Get the current size of the temporary file
-                        long currentSize = new FileInfo(TempFile).Length;
-
-                        // Check if the file size has changed
-                        if (currentSize != prevSize && !skipCurrentClipboard)
+                        // Update the tray icon to indicate active state
+                        _syncContext.Post(_ =>
                         {
-                            prevSize = currentSize;
+                            UpdateTrayIcon(ActivityState.Active);
+                        }, null);
 
-                            // Update the tray icon to indicate active state
-                            _syncContext.Post(_ =>
-                            {
-                                UpdateTrayIcon(ActivityState.Active);
-                            }, null);
+                        // Kill any existing instances of sox.exe and piper.exe
+                        ProcessHelper.TerminateProcesses("sox");
+                        ProcessHelper.TerminateProcesses("piper");
 
-                            // Kill any existing instances of sox.exe and piper.exe
-                            KillProcesses("sox");
-                            KillProcesses("piper");
+                        // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
+                        await Task.Run(() =>
+                        {
+                            string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
+                            string soxCommand = $"{SoxPath} {SoxArgs}";
+                            Process piperProcess = new Process();
+                            piperProcess.StartInfo.FileName = "cmd.exe";
+                            piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
+                            piperProcess.StartInfo.UseShellExecute = false;
+                            piperProcess.StartInfo.CreateNoWindow = true;
+                            piperProcess.Start();
+                            piperProcess.WaitForExit();
+                        });
 
-                            // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
-                            await Task.Run(() =>
-                            {
-                                string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
-                                string soxCommand = $"{SoxPath} {SoxArgs}";
-                                Process piperProcess = new Process();
-                                piperProcess.StartInfo.FileName = "cmd.exe";
-                                piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
-                                piperProcess.StartInfo.UseShellExecute = false;
-                                piperProcess.StartInfo.CreateNoWindow = true;
-                                piperProcess.StartInfo.RedirectStandardError = true;
-
-                                piperProcess.Start();
-                                string errorOutput = piperProcess.StandardError.ReadToEnd();
-                                piperProcess.WaitForExit();
-                            });
-
-                            // Update the tray icon to indicate idle state
-                            _syncContext.Post(_ =>
-                            {
-                                UpdateTrayIcon(ActivityState.Idle);
-                            }, null);
-
-                            // Clear the clipboard after a short delay
-                            await Task.Delay(1000); // Adjust the delay as needed
-                            _syncContext.Post(_ =>
-                            {
-                                System.Windows.Forms.Clipboard.Clear();
-                            }, null);
-
+                        // Clear the temporary file after processing
+                        try
+                        {
+                            File.WriteAllText(TempFile, string.Empty);
                         }
+                        catch (IOException ex)
+                        {
+                            // Handle the exception if the file is in use or cannot be accessed
+                            LogError(ex);
+                            // You can choose to display an error message to the user or take appropriate action
+                        }
+
+
+                        // Update the tray icon to indicate idle state
+                        _syncContext.Post(_ =>
+                        {
+                            UpdateTrayIcon(ActivityState.Idle);
+                        }, null);
                     }
-                    // Add a small delay to reduce CPU usage
+
                     await Task.Delay(100);
                 }
             }
             catch (Exception ex)
             {
                 LogError(ex);
-                throw;
             }
         }
+
 
         private void UpdateTrayIcon(ActivityState state)
         {
@@ -451,24 +495,6 @@ namespace ClipboardTTS
         {
             Active,
             Idle
-        }
-
-
-        private void KillProcesses(string processName)
-        {
-            Process[] processes = Process.GetProcessesByName(processName);
-            foreach (Process process in processes)
-            {
-                try
-                {
-                    process.Kill();
-                }
-                catch (Exception ex)
-                {
-                    // Log any exceptions that occur while killing the process
-                    LogError(ex);
-                }
-            }
         }
     }
 }
