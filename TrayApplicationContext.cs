@@ -15,14 +15,14 @@ namespace ClipboardTTS
 {
     public static class ProcessHelper
     {
-        public static void TerminateProcesses(string processName)
+        public static void KillProcesses(string processName)
         {
             Process[] processes = Process.GetProcessesByName(processName);
             foreach (Process process in processes)
             {
                 try
                 {
-                    process.CloseMainWindow();
+                    process.Kill();
                 }
                 catch (Exception ex)
                 {
@@ -31,6 +31,7 @@ namespace ClipboardTTS
                 }
             }
         }
+
 
         private static void LogError(Exception ex)
         {
@@ -57,8 +58,8 @@ namespace ClipboardTTS
             if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotKeyId)
             {
                 // Hotkey pressed, execute the command to kill both sox.exe and piper.exe
-                ProcessHelper.TerminateProcesses("sox");
-                ProcessHelper.TerminateProcesses("piper");
+                ProcessHelper.KillProcesses("sox");
+                ProcessHelper.KillProcesses("piper");
 
                 // Restart the monitoring process
                 context.RestartMonitoring();
@@ -91,8 +92,11 @@ namespace ClipboardTTS
         [DllImport("user32.dll")]
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
+        [DllImport("user32.dll")]
+        private static extern short VkKeyScan(char ch);
+
         private const uint MOD_ALT = 0x0001;
-        private const uint VK_Q = 0x51;
+        private const uint VK_Q = 0x51; // Virtual key code for 'Q' key
 
         private HotkeyWindow hotkeyWindow;
 
@@ -104,7 +108,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.1";
+            string version = "1.1.2";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -207,6 +211,7 @@ namespace ClipboardTTS
 
                 trayIcon.ContextMenuStrip = contextMenu;
 
+                // hotkey registration code
                 hotkeyWindow = new HotkeyWindow(this);
                 RegisterHotKey(hotkeyWindow.Handle, HotkeyWindow.HotKeyId, MOD_ALT, VK_Q);
 
@@ -467,8 +472,8 @@ namespace ClipboardTTS
                         }, null);
 
                         // Kill any existing instances of sox.exe and piper.exe
-                        ProcessHelper.TerminateProcesses("sox");
-                        ProcessHelper.TerminateProcesses("piper");
+                        ProcessHelper.KillProcesses("sox");
+                        ProcessHelper.KillProcesses("piper");
 
                         // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
                         await Task.Run(() =>
