@@ -45,6 +45,8 @@ namespace ClipboardTTS
     {
         private const int WM_HOTKEY = 0x0312;
         public const int HotKeyId = 1; // Make HotKeyId public
+        private bool isHotkeyProcessing = false;
+
 
         private TrayApplicationContext context;
 
@@ -57,12 +59,16 @@ namespace ClipboardTTS
         {
             if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotKeyId)
             {
-                // Hotkey pressed, execute the command to kill both sox.exe and piper.exe
-                ProcessHelper.KillProcesses("sox");
-                ProcessHelper.KillProcesses("piper");
+                if (!isHotkeyProcessing)
+                {
+                    isHotkeyProcessing = true;
 
-                // Restart the monitoring process
-                context.RestartMonitoring();
+                    // Stop the speech synthesis
+                    context.StopSpeech();
+
+                    // Reset the flag after processing is completed
+                    isHotkeyProcessing = false;
+                }
             }
 
             base.WndProc(ref m);
@@ -72,6 +78,8 @@ namespace ClipboardTTS
     public class TrayApplicationContext : ApplicationContext
     {
         private bool _isFirstClipboardChange = true;
+        private bool _isFirstClipboardChangeAfterMonitoring = true;
+
         private const string TempFile = "clipboard_temp.txt";
         private const string SoxPath = "sox.exe";
         private const string PiperPath = "piper.exe";
@@ -108,7 +116,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.2";
+            string version = "1.1.3-test";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -231,16 +239,29 @@ namespace ClipboardTTS
         {
             // Stop the current monitoring thread
             isRunning = false;
-            monitoringThread.Join();
+            if (monitoringThread != null && monitoringThread.IsAlive)
+            {
+                monitoringThread.Join();
+            }
 
-            // Skip the current clipboard content
-            bool skipCurrentClipboard = true;
+            // Clear the temporary file
+            try
+            {
+                File.WriteAllText(TempFile, string.Empty);
+            }
+            catch (IOException ex)
+            {
+                // Handle the exception if the file is in use or cannot be accessed
+                LogError(ex);
+                // You can choose to display an error message to the user or take appropriate action
+            }
 
             // Start a new monitoring thread
             isRunning = true;
             monitoringThread = new Thread(StartMonitoring);
             monitoringThread.Start();
         }
+
 
         protected override void Dispose(bool disposing)
         {
@@ -327,31 +348,18 @@ namespace ClipboardTTS
 
             if (isMonitoringEnabled)
             {
-                // Clear the clipboard_temp.txt file when enabling monitoring
-                try
-                {
-                    File.WriteAllText(TempFile, string.Empty);
-                }
-                catch (IOException ex)
-                {
-                    // Handle the exception if the file is in use or cannot be accessed
-                    LogError(ex);
-                    // You can choose to display an error message to the user or take appropriate action
-                }
+                _isFirstClipboardChangeAfterMonitoring = true;
             }
         }
 
 
+
+
         private void StopItem_Click(object sender, EventArgs e)
         {
-            // Kill the sox.exe adn piper.exe process
-            Process.Start(new ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = "/C taskkill /F /IM sox.exe /IM piper.exe",
-                CreateNoWindow = true,
-                UseShellExecute = false
-            }).WaitForExit();
+                StopSpeech();
+            }
 
             // Update the tray icon to indicate idle state
             _syncContext.Post(_ =>
@@ -395,6 +403,25 @@ namespace ClipboardTTS
             Application.Exit();
         }
 
+        // Insert the StopSpeech method here
+        public void StopSpeech()
+        {
+            // Kill the sox.exe and piper.exe processes if they are running
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/C taskkill /F /IM sox.exe /IM piper.exe",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            }).WaitForExit();
+
+            // Update the tray icon to indicate idle state
+            _syncContext.Post(_ =>
+            {
+                UpdateTrayIcon(ActivityState.Idle);
+            }, null);
+        }
+
         // Add the LogError method here
         private void LogError(Exception ex)
         {
@@ -404,6 +431,8 @@ namespace ClipboardTTS
             File.AppendAllText(logFilePath, errorMessage);
         }
 
+
+        private SemaphoreSlim _monitoringSemaphore = new SemaphoreSlim(1, 1);
 
         private async void StartMonitoring()
         {
@@ -418,95 +447,96 @@ namespace ClipboardTTS
                 {
                     if (isMonitoringEnabled)
                     {
-                        // Get the current clipboard text
-                        string clipboardText = ClipboardService.GetText();
+                        // Acquire the semaphore to ensure only one monitoring process is running
+                        await _monitoringSemaphore.WaitAsync();
 
-                        // Check if the clipboard text is null, empty, or unchanged
-                        if (string.IsNullOrEmpty(clipboardText) || clipboardText == prevClipboardText)
-                        {
-                            await Task.Delay(100);
-                            continue;
-                        }
-
-                        // Update the previous clipboard text
-                        prevClipboardText = clipboardText;
-
-                        // Split the clipboard text into words
-                        string[] words = Regex.Split(clipboardText, @"\s+");
-
-                        // Filter out the ignored words
-                        string filteredText = string.Join(" ", words.Where(word => !ignoreWords.Contains(word, StringComparer.OrdinalIgnoreCase)));
-
-                        // Write the filtered text to a temporary file
-                        bool writtenSuccessfully = false;
-                        int retryCount = 0;
-                        while (!writtenSuccessfully && retryCount < 3)
-                        {
-                            try
-                            {
-                                using (StreamWriter writer = new StreamWriter(TempFile))
-                                {
-                                    writer.Write(filteredText);
-                                }
-                                writtenSuccessfully = true;
-                            }
-                            catch (IOException)
-                            {
-                                retryCount++;
-                                await Task.Delay(500); // Wait for a short delay before retrying
-                            }
-                        }
-
-                        if (!writtenSuccessfully)
-                        {
-                            // Handle the case when the file couldn't be written after multiple retries
-                            // Log an error or take appropriate action
-                            LogError(new Exception("Failed to write to the temporary file after multiple retries."));
-                            continue; // Skip further processing for the current iteration
-                        }
-
-                        // Update the tray icon to indicate active state
-                        _syncContext.Post(_ =>
-                        {
-                            UpdateTrayIcon(ActivityState.Active);
-                        }, null);
-
-                        // Kill any existing instances of sox.exe and piper.exe
-                        ProcessHelper.KillProcesses("sox");
-                        ProcessHelper.KillProcesses("piper");
-
-                        // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
-                        await Task.Run(() =>
-                        {
-                            string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
-                            string soxCommand = $"{SoxPath} {SoxArgs}";
-                            Process piperProcess = new Process();
-                            piperProcess.StartInfo.FileName = "cmd.exe";
-                            piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
-                            piperProcess.StartInfo.UseShellExecute = false;
-                            piperProcess.StartInfo.CreateNoWindow = true;
-                            piperProcess.Start();
-                            piperProcess.WaitForExit();
-                        });
-
-                        // Clear the temporary file after processing
                         try
                         {
-                            File.WriteAllText(TempFile, string.Empty);
-                        }
-                        catch (IOException ex)
-                        {
-                            // Handle the exception if the file is in use or cannot be accessed
-                            LogError(ex);
-                            // You can choose to display an error message to the user or take appropriate action
-                        }
+                            // Get the current clipboard text
+                            string clipboardText = ClipboardService.GetText();
 
+                            // Check if the clipboard text is null, empty, or unchanged
+                            if (string.IsNullOrEmpty(clipboardText) || clipboardText == prevClipboardText)
+                            {
+                                await Task.Delay(100);
+                                continue;
+                            }
 
-                        // Update the tray icon to indicate idle state
-                        _syncContext.Post(_ =>
+                            // Update the previous clipboard text
+                            prevClipboardText = clipboardText;
+
+                            // Skip processing the first clipboard change after monitoring is enabled
+                            if (_isFirstClipboardChangeAfterMonitoring)
+                            {
+                                _isFirstClipboardChangeAfterMonitoring = false;
+                                await Task.Delay(100);
+                                continue;
+                            }
+
+                            // Split the clipboard text into words
+                            string[] words = Regex.Split(clipboardText, @"\s+");
+
+                            // Filter out the ignored words
+                            string filteredText = string.Join(" ", words.Where(word => !ignoreWords.Contains(word, StringComparer.OrdinalIgnoreCase)));
+
+                            // Write the filtered text to the temporary file
+                            try
+                            {
+                                File.WriteAllText(TempFile, filteredText);
+                            }
+                            catch (IOException ex)
+                            {
+                                // Handle the exception if the file is in use or cannot be accessed
+                                LogError(ex);
+                                continue;
+                            }
+
+                            // Update the tray icon to indicate active state
+                            _syncContext.Post(_ =>
+                            {
+                                UpdateTrayIcon(ActivityState.Active);
+                            }, null);
+
+                            // Kill any existing instances of sox.exe and piper.exe
+                            ProcessHelper.KillProcesses("sox");
+                            ProcessHelper.KillProcesses("piper");
+
+                            // Use Piper TTS to convert the text from the temporary file to raw audio and pipe it to SoX
+                            await Task.Run(() =>
+                            {
+                                string piperCommand = $"{PiperPath} {PiperArgs} < \"{TempFile}\"";
+                                string soxCommand = $"{SoxPath} {SoxArgs}";
+                                Process piperProcess = new Process();
+                                piperProcess.StartInfo.FileName = "cmd.exe";
+                                piperProcess.StartInfo.Arguments = $"/C {piperCommand} | {soxCommand}";
+                                piperProcess.StartInfo.UseShellExecute = false;
+                                piperProcess.StartInfo.CreateNoWindow = true;
+                                piperProcess.Start();
+                                piperProcess.WaitForExit();
+                            });
+
+                            // Clear the temporary file after processing
+                            try
+                            {
+                                File.WriteAllText(TempFile, string.Empty);
+                            }
+                            catch (IOException ex)
+                            {
+                                // Handle the exception if the file is in use or cannot be accessed
+                                LogError(ex);
+                            }
+
+                            // Update the tray icon to indicate idle state
+                            _syncContext.Post(_ =>
+                            {
+                                UpdateTrayIcon(ActivityState.Idle);
+                            }, null);
+                        }
+                        finally
                         {
-                            UpdateTrayIcon(ActivityState.Idle);
-                        }, null);
+                            // Release the semaphore
+                            _monitoringSemaphore.Release();
+                        }
                     }
 
                     await Task.Delay(100);
@@ -517,7 +547,6 @@ namespace ClipboardTTS
                 LogError(ex);
             }
         }
-
 
         private void UpdateTrayIcon(ActivityState state)
         {
