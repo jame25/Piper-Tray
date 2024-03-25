@@ -211,7 +211,7 @@ namespace ClipboardTTS
                 trayIcon.Visible = true;
 
                 ContextMenuStrip contextMenu = new ContextMenuStrip();
-                ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
+                ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Monitoring Enabled", null, MonitoringItem_Click);
                 monitoringItem.Checked = isMonitoringEnabled;
                 contextMenu.Items.Add(monitoringItem);
                 contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
@@ -345,7 +345,7 @@ namespace ClipboardTTS
         {
             isMonitoringEnabled = !isMonitoringEnabled;
             ToolStripMenuItem monitoringItem = (ToolStripMenuItem)sender;
-            monitoringItem.Text = isMonitoringEnabled ? "Disable Monitoring" : "Enable Monitoring";
+            monitoringItem.Text = isMonitoringEnabled ? "Monitoring Enabled" : "Monitoring Disabled";
             monitoringItem.Checked = isMonitoringEnabled;
 
             if (isMonitoringEnabled)
