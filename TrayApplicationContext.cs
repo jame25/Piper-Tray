@@ -84,7 +84,7 @@ namespace ClipboardTTS
         private const string SoxPath = "sox.exe";
         private const string PiperPath = "piper.exe";
         private string PiperArgs;
-        private const string SoxArgs = "-t raw -b 16 -e signed-integer -r 22050 -c 1 - -t waveaudio pad 0 0.010";
+        private const string SoxArgs = "-t raw -b 16 -e signed-integer -r 22050 -c 1 - -t waveaudio pad 0 3";
         private const string SettingsFile = "settings.conf";
 
         private NotifyIcon trayIcon;
@@ -212,6 +212,7 @@ namespace ClipboardTTS
 
                 ContextMenuStrip contextMenu = new ContextMenuStrip();
                 ToolStripMenuItem monitoringItem = new ToolStripMenuItem("Disable Monitoring", null, MonitoringItem_Click);
+                monitoringItem.Checked = isMonitoringEnabled;
                 contextMenu.Items.Add(monitoringItem);
                 contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
                 contextMenu.Items.Add("About", null, AboutItem_Click);
@@ -345,12 +346,14 @@ namespace ClipboardTTS
             isMonitoringEnabled = !isMonitoringEnabled;
             ToolStripMenuItem monitoringItem = (ToolStripMenuItem)sender;
             monitoringItem.Text = isMonitoringEnabled ? "Disable Monitoring" : "Enable Monitoring";
+            monitoringItem.Checked = isMonitoringEnabled;
 
             if (isMonitoringEnabled)
             {
                 _isFirstClipboardChangeAfterMonitoring = true;
             }
         }
+
 
 
 
