@@ -135,7 +135,7 @@ namespace ClipboardTTS
 
             // Update the PiperArgs with the new speed value
             string currentModel = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
-            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed} --output-raw";
+            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} --output-raw";
 
             // Save the updated settings to the settings.conf file
             SaveSettings();
@@ -147,11 +147,12 @@ namespace ClipboardTTS
 
             // Update the PiperArgs with the default speed value
             string currentModel = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
-            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed} --output-raw";
+            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} --output-raw";
 
             // Save the updated settings to the settings.conf file
             SaveSettings();
         }
+
 
 
         private void UpdatePiperArgs()
@@ -162,7 +163,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.6";
+            string version = "1.1.7";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -364,7 +365,7 @@ namespace ClipboardTTS
             {
                 string[] lines = File.ReadAllLines(SettingsFile);
                 string model = "";
-                string speed = "";
+                double speed = 1.0; // Default speed value
 
                 foreach (string line in lines)
                 {
@@ -374,7 +375,12 @@ namespace ClipboardTTS
                     }
                     else if (line.StartsWith("speed="))
                     {
-                        speed = line.Substring("speed=".Length).Trim();
+                        string speedValue = line.Substring("speed=".Length).Trim();
+
+                        if (double.TryParse(speedValue, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double value))
+                        {
+                            speed = value;
+                        }
                     }
                     else if (line.StartsWith("logging="))
                     {
@@ -387,27 +393,31 @@ namespace ClipboardTTS
                     }
                 }
 
-                if (!string.IsNullOrEmpty(model) && !string.IsNullOrEmpty(speed))
+                if (!string.IsNullOrEmpty(model))
                 {
-                    PiperArgs = $"--model {model} --length_scale {speed} --output-raw";
+                    PiperArgs = $"--model {model} --length_scale {speed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} --output-raw";
                 }
                 else
                 {
-                    // Use default model and speed if either is missing in the settings file
+                    // Use default model if it's missing in the settings file
                     string defaultModel = GetDefaultModel();
-                    PiperArgs = $"--model {defaultModel} --length_scale 1 --output-raw";
+                    PiperArgs = $"--model {defaultModel} --length_scale {speed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} --output-raw";
                 }
+
+                currentSpeed = speed; // Update the currentSpeed variable
             }
             else
             {
                 // Use default model and speed if settings file doesn't exist
                 string defaultModel = GetDefaultModel();
-                PiperArgs = $"--model {defaultModel} --length_scale 1 --output-raw";
+                PiperArgs = $"--model {defaultModel} --length_scale 1.0 --output-raw";
+                currentSpeed = 1.0; // Set the default speed
             }
 
             // Store the logging setting in a class-level variable
             EnableLogging = enableLogging;
         }
+
 
         private void SaveSettings(string newModel = null)
         {
