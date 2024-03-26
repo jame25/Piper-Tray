@@ -84,10 +84,11 @@ namespace ClipboardTTS
         private const string SoxPath = "sox.exe";
         private const string PiperPath = "piper.exe";
         private string PiperArgs;
-        private const string SoxArgs = "-t raw -b 16 -e signed-integer -r 22050 -c 1 - -t waveaudio pad 0 3";
+        private const string SoxArgs = "-t raw -b 16 -e signed-integer -r 22050 -c 1 - -t waveaudio pad 0 1";
         private const string SettingsFile = "settings.conf";
 
         private NotifyIcon trayIcon;
+        private ToolStripMenuItem voiceMenuItem;
         private bool isRunning = true;
         private bool EnableLogging { get; set; }
         private bool isMonitoringEnabled = true;
@@ -116,7 +117,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.4";
+            string version = "1.1.5";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -215,6 +216,11 @@ namespace ClipboardTTS
                 monitoringItem.Checked = isMonitoringEnabled;
                 contextMenu.Items.Add(monitoringItem);
                 contextMenu.Items.Add("Stop Speech", null, StopItem_Click);
+
+                voiceMenuItem = new ToolStripMenuItem("Voice");
+                PopulateVoiceModels(voiceMenuItem);
+                contextMenu.Items.Add(voiceMenuItem);
+
                 contextMenu.Items.Add("About", null, AboutItem_Click);
                 contextMenu.Items.Add("Exit", null, ExitItem_Click);
 
@@ -227,8 +233,7 @@ namespace ClipboardTTS
                 _syncContext = System.Threading.SynchronizationContext.Current;
 
                 // Start monitoring the clipboard automatically
-                monitoringThread = new Thread(StartMonitoring);
-                monitoringThread.Start();
+                StartMonitoring();
             }
             catch (Exception ex)
             {
@@ -328,18 +333,97 @@ namespace ClipboardTTS
                 else
                 {
                     // Use default model and speed if either is missing in the settings file
-                    PiperArgs = "--model en_US-libritts_r-medium.onnx --length_scale 1 --output-raw";
+                    string defaultModel = GetDefaultModel();
+                    PiperArgs = $"--model {defaultModel} --length_scale 1 --output-raw";
                 }
             }
             else
             {
                 // Use default model and speed if settings file doesn't exist
-                PiperArgs = "--model en_US-libritts_r-medium.onnx --length_scale 1 --output-raw";
+                string defaultModel = GetDefaultModel();
+                PiperArgs = $"--model {defaultModel} --length_scale 1 --output-raw";
             }
 
             // Store the logging setting in a class-level variable
             EnableLogging = enableLogging;
         }
+
+        private string GetDefaultModel()
+        {
+            string[] onnxFiles = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.onnx");
+            if (onnxFiles.Length > 0)
+            {
+                return Path.GetFileNameWithoutExtension(onnxFiles[0]);
+            }
+            else
+            {
+                // Return a fallback default model if no .onnx files are found
+                return "en_US-libritts_r-medium";
+            }
+        }
+
+
+        private void PopulateVoiceModels(ToolStripMenuItem voiceMenuItem)
+        {
+            voiceMenuItem.DropDownItems.Clear();
+
+            string[] onnxFiles = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.onnx");
+            foreach (string onnxFile in onnxFiles)
+            {
+                string modelName = Path.GetFileNameWithoutExtension(onnxFile);
+                ToolStripMenuItem modelMenuItem = new ToolStripMenuItem(modelName);
+                modelMenuItem.Click += (sender, e) => ChangeVoiceModel(modelName);
+
+                // Add a check mark next to the currently selected voice model
+                if (PiperArgs.Contains($"--model {modelName}.onnx"))
+                {
+                    modelMenuItem.Checked = true;
+                }
+
+                voiceMenuItem.DropDownItems.Add(modelMenuItem);
+            }
+
+            // Add a separator and a refresh option
+            voiceMenuItem.DropDownItems.Add(new ToolStripSeparator());
+            ToolStripMenuItem refreshMenuItem = new ToolStripMenuItem("Refresh");
+            refreshMenuItem.Click += (sender, e) => PopulateVoiceModels(voiceMenuItem);
+            voiceMenuItem.DropDownItems.Add(refreshMenuItem);
+        }
+
+
+        private void ChangeVoiceModel(string modelName)
+        {
+            PiperArgs = $"--model {modelName}.onnx --length_scale 1 --output-raw";
+            SaveSettings();
+
+            // Update the check mark for the selected voice model
+            foreach (ToolStripItem item in voiceMenuItem.DropDownItems)
+            {
+                if (item is ToolStripMenuItem menuItem)
+                {
+                    menuItem.Checked = menuItem.Text == modelName;
+                }
+            }
+        }
+
+
+
+        private void SaveSettings()
+        {
+            string model = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
+            string speed = PiperArgs.Split(new[] { "--length_scale" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
+            string loggingValue = EnableLogging ? "true" : "false";
+
+            string[] lines = {
+                $"model={model}",
+                $"speed={speed}",
+                $"logging={loggingValue}"
+            };
+
+            File.WriteAllLines(SettingsFile, lines);
+        }
+
+
 
         private void MonitoringItem_Click(object sender, EventArgs e)
         {
@@ -353,9 +437,6 @@ namespace ClipboardTTS
                 _isFirstClipboardChangeAfterMonitoring = true;
             }
         }
-
-
-
 
 
         private void StopItem_Click(object sender, EventArgs e)
