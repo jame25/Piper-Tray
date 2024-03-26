@@ -86,6 +86,8 @@ namespace ClipboardTTS
         private string PiperArgs;
         private const string SoxArgs = "-t raw -b 16 -e signed-integer -r 22050 -c 1 - -t waveaudio pad 0 1";
         private const string SettingsFile = "settings.conf";
+        private double currentSpeed = 1.0;
+        private string model;
 
         private NotifyIcon trayIcon;
         private ToolStripMenuItem voiceMenuItem;
@@ -115,9 +117,52 @@ namespace ClipboardTTS
         private Thread monitoringThread;
         private System.Threading.SynchronizationContext _syncContext;
 
+        private void UpdateSpeed(bool isFaster)
+        {
+            if (isFaster)
+            {
+                if (currentSpeed > 0.1)
+                    currentSpeed = Math.Max(currentSpeed - 0.1, 0.1);
+            }
+            else
+            {
+                if (currentSpeed < 1.0)
+                    currentSpeed = Math.Min(currentSpeed + 0.1, 1.0);
+            }
+
+            // Round the currentSpeed to one decimal place
+            currentSpeed = Math.Round(currentSpeed, 1);
+
+            // Update the PiperArgs with the new speed value
+            string currentModel = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
+            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed} --output-raw";
+
+            // Save the updated settings to the settings.conf file
+            SaveSettings();
+        }
+
+        private void ResetSpeed()
+        {
+            currentSpeed = 1.0;
+
+            // Update the PiperArgs with the default speed value
+            string currentModel = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
+            PiperArgs = $"--model {currentModel} --length_scale {currentSpeed} --output-raw";
+
+            // Save the updated settings to the settings.conf file
+            SaveSettings();
+        }
+
+
+        private void UpdatePiperArgs()
+        {
+            PiperArgs = $"--model {model} --length_scale {currentSpeed} --output-raw";
+        }
+
+
         private void ShowAboutWindow()
         {
-            string version = "1.1.5";
+            string version = "1.1.6";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -220,6 +265,22 @@ namespace ClipboardTTS
                 voiceMenuItem = new ToolStripMenuItem("Voice");
                 PopulateVoiceModels(voiceMenuItem);
                 contextMenu.Items.Add(voiceMenuItem);
+
+                // Add the 'Speed' menu item
+                ToolStripMenuItem speedMenuItem = new ToolStripMenuItem("Speed");
+                ToolStripMenuItem fasterMenuItem = new ToolStripMenuItem("Faster");
+                ToolStripMenuItem slowerMenuItem = new ToolStripMenuItem("Slower");
+                ToolStripMenuItem resetMenuItem = new ToolStripMenuItem("Reset");
+
+                fasterMenuItem.Click += (sender, e) => UpdateSpeed(true);
+                slowerMenuItem.Click += (sender, e) => UpdateSpeed(false);
+                resetMenuItem.Click += (sender, e) => ResetSpeed();
+
+                speedMenuItem.DropDownItems.Add(fasterMenuItem);
+                speedMenuItem.DropDownItems.Add(slowerMenuItem);
+                speedMenuItem.DropDownItems.Add(resetMenuItem);
+
+                contextMenu.Items.Add(speedMenuItem);
 
                 contextMenu.Items.Add("About", null, AboutItem_Click);
                 contextMenu.Items.Add("Exit", null, ExitItem_Click);
@@ -348,6 +409,42 @@ namespace ClipboardTTS
             EnableLogging = enableLogging;
         }
 
+        private void SaveSettings(string newModel = null)
+        {
+            try
+            {
+                string[] lines = File.ReadAllLines(SettingsFile);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    if (lines[i].StartsWith("model="))
+                    {
+                        if (newModel != null)
+                        {
+                            lines[i] = $"model={newModel}";
+                        }
+                    }
+                    else if (lines[i].StartsWith("speed="))
+                    {
+                        lines[i] = $"speed={currentSpeed.ToString("0.0")}";
+                    }
+                    else if (lines[i].StartsWith("logging="))
+                    {
+                        lines[i] = $"logging={EnableLogging}";
+                    }
+                }
+                File.WriteAllLines(SettingsFile, lines);
+            }
+            catch (IOException ex)
+            {
+                // Handle the exception if the file is in use or cannot be accessed
+                LogError(ex);
+                // You can choose to display an error message to the user or take appropriate action
+            }
+        }
+
+
+
+
         private string GetDefaultModel()
         {
             string[] onnxFiles = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.onnx");
@@ -393,8 +490,8 @@ namespace ClipboardTTS
 
         private void ChangeVoiceModel(string modelName)
         {
-            PiperArgs = $"--model {modelName}.onnx --length_scale 1 --output-raw";
-            SaveSettings();
+            PiperArgs = $"--model {modelName}.onnx --length_scale {currentSpeed} --output-raw";
+            SaveSettings(modelName);
 
             // Update the check mark for the selected voice model
             foreach (ToolStripItem item in voiceMenuItem.DropDownItems)
@@ -410,19 +507,27 @@ namespace ClipboardTTS
 
         private void SaveSettings()
         {
-            string model = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
-            string speed = PiperArgs.Split(new[] { "--length_scale" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
-            string loggingValue = EnableLogging ? "true" : "false";
+            try
+            {
+                string model = PiperArgs.Split(new[] { "--model" }, StringSplitOptions.None)[1].Trim().Split(' ')[0];
+                string speed = currentSpeed.ToString("0.0");
+                string loggingValue = EnableLogging ? "true" : "false";
 
-            string[] lines = {
-                $"model={model}",
-                $"speed={speed}",
-                $"logging={loggingValue}"
-            };
+                string[] lines = {
+            $"model={model}",
+            $"speed={speed}",
+            $"logging={loggingValue}"
+        };
 
-            File.WriteAllLines(SettingsFile, lines);
+                File.WriteAllLines(SettingsFile, lines);
+            }
+            catch (IOException ex)
+            {
+                // Handle the exception if the file is in use or cannot be accessed
+                LogError(ex);
+                // You can choose to display an error message to the user or take appropriate action
+            }
         }
-
 
 
         private void MonitoringItem_Click(object sender, EventArgs e)
