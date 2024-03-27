@@ -163,7 +163,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.7";
+            string version = "1.1.8";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -430,7 +430,7 @@ namespace ClipboardTTS
                     {
                         if (newModel != null)
                         {
-                            lines[i] = $"model={newModel}";
+                            lines[i] = $"model={newModel}.onnx";
                         }
                     }
                     else if (lines[i].StartsWith("speed="))
