@@ -163,7 +163,7 @@ namespace ClipboardTTS
 
         private void ShowAboutWindow()
         {
-            string version = "1.1.8";
+            string version = "1.1.9";
             string message = $"Piper Tray\n\nVersion: {version}\n\nDeveloped by jame25";
             string url = "https://github.com/jame25/Piper-Tray";
 
@@ -642,6 +642,21 @@ namespace ClipboardTTS
                 // Read the ignore dictionary file
                 string[] ignoreWords = File.Exists("ignore.dict") ? File.ReadAllLines("ignore.dict") : new string[0];
 
+                // Read the replace dictionary file
+                Dictionary<string, string> replaceWords = new Dictionary<string, string>();
+                if (File.Exists("replace.dict"))
+                {
+                    string[] lines = File.ReadAllLines("replace.dict");
+                    foreach (string line in lines)
+                    {
+                        string[] parts = line.Split('=');
+                        if (parts.Length == 2)
+                        {
+                            replaceWords[parts[0].Trim()] = parts[1].Trim();
+                        }
+                    }
+                }
+
                 while (isRunning)
                 {
                     if (isMonitoringEnabled)
@@ -678,10 +693,21 @@ namespace ClipboardTTS
                             // Filter out the ignored words
                             string filteredText = string.Join(" ", words.Where(word => !ignoreWords.Contains(word, StringComparer.OrdinalIgnoreCase)));
 
-                            // Write the filtered text to the temporary file
+                            // Replace words based on the replace dictionary
+                            string[] modifiedWords = filteredText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                            for (int i = 0; i < modifiedWords.Length; i++)
+                            {
+                                if (replaceWords.ContainsKey(modifiedWords[i]))
+                                {
+                                    modifiedWords[i] = replaceWords[modifiedWords[i]];
+                                }
+                            }
+                            string modifiedText = string.Join(" ", modifiedWords);
+
+                            // Write the modified text to the temporary file
                             try
                             {
-                                File.WriteAllText(TempFile, filteredText);
+                                File.WriteAllText(TempFile, modifiedText);
                             }
                             catch (IOException ex)
                             {
@@ -746,6 +772,7 @@ namespace ClipboardTTS
                 LogError(ex);
             }
         }
+
 
         private void UpdateTrayIcon(ActivityState state)
         {
