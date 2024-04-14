@@ -14,7 +14,8 @@ If you would prefer a GUI, check out my other project: [Piper Read](https://gith
 * Change Piper TTS voice model
 * Control Piper TTS speech rate
 * Hotkey support (ALT + Q) to stop speech
-* Prevent keywords being read (ignore.dict)  
+* Prevent keywords being read (ignore.dict)
+* Replace keywords with alternatives (replace.dict)
 
 ## Prerequisites:
 
