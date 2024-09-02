@@ -39,6 +39,14 @@ You can change the voice model being utilized by Piper Tray by editing the first
 
 Speech rate can be altered using the 'speed' variable (1.0 is the default speed, lower value i.e 0.5 = faster).
 
+## Dictionary Rules:
+
+Keywords found in the **ignore.dict** file are skipped over. 
+
+If a keyword in the **banned.dict** file is detected, the entire line is skipped.
+
+**replace.dict** functions as a replacement for a keyword or phrase, i.e LHC=Large Hadron Collider
+
 ## Support:
 
 If you find this project helpful and would like to support its development, you can buy me a coffee on Ko-Fi:
