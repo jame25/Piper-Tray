@@ -694,7 +694,7 @@ namespace ClipboardTTS
                             string filteredText = string.Join(" ", words.Where(word => !ignoreWords.Contains(word, StringComparer.OrdinalIgnoreCase)));
 
                             // Replace words based on the replace dictionary
-                            string[] modifiedWords = filteredText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                            string[] modifiedWords = filteredText.Split(new[] { ' ', '\t', '\n', '\r', '#', '*' }, StringSplitOptions.RemoveEmptyEntries);
                             for (int i = 0; i < modifiedWords.Length; i++)
                             {
                                 if (replaceWords.ContainsKey(modifiedWords[i]))
