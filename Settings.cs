@@ -10,12 +10,18 @@ namespace PiperTray
     public class SettingsForm : Form
     {
         private bool _isInitialized = false;
+        private bool isInitializing = true;
         private static SettingsForm instance = null;
         private static readonly object _lock = new object();
         public TabControl TabControl => tabControl;
         public TabPage GeneralTab => generalTab;
         private readonly double[] speedOptions = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 };
         private string currentVoiceModel;
+
+        private ComboBox speakerComboBox;
+        private int currentSpeaker = 0;
+        private Dictionary<string, int> speakerIdMap = new Dictionary<string, int>();
+
         public event EventHandler VoiceModelChanged;
         public event EventHandler<double> SpeedChanged;
         protected virtual void OnVoiceModelChanged()
@@ -164,6 +170,18 @@ namespace PiperTray
 
         }
 
+        private void speakerComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (!isInitializing && speakerComboBox.SelectedItem != null)
+            {
+                int selectedSpeaker = int.Parse(speakerComboBox.SelectedItem.ToString());
+                var app = PiperTrayApp.GetInstance();
+                app.UpdateCurrentSpeaker(selectedSpeaker);
+                app.SaveSettings(speaker: selectedSpeaker);
+                Log($"[speakerComboBox_SelectedIndexChanged] Updated speaker to: {selectedSpeaker}");
+            }
+        }
+
         private void RegisterHotkeys()
         {
             Log($"[RegisterHotkeys] Starting hotkey registration process");
@@ -274,20 +292,27 @@ namespace PiperTray
             this.VoiceModelComboBox = new System.Windows.Forms.ComboBox();
             this.VoiceModelComboBox.Name = "VoiceModelComboBox";
             this.VoiceModelComboBox.Location = new System.Drawing.Point(10, 63);
-            this.VoiceModelComboBox.Width = 250;
+            this.VoiceModelComboBox.Width = 180;
             this.VoiceModelComboBox.SelectedIndexChanged += VoiceModelComboBox_SelectedIndexChanged;
             generalTab.Controls.Add(this.VoiceModelComboBox);
+
+            speakerComboBox = new ComboBox();
+            speakerComboBox.Location = new Point(VoiceModelComboBox.Right + 5, VoiceModelComboBox.Top);
+            speakerComboBox.Width = 50;
+            generalTab.Controls.Add(speakerComboBox);
+            speakerComboBox.SelectedIndexChanged += speakerComboBox_SelectedIndexChanged;
 
             this.refreshVoiceModelsButton = new Button();
             this.refreshVoiceModelsButton.Image = GetRefreshIcon();
             this.refreshVoiceModelsButton.Size = new Size(24, 24);
-            this.refreshVoiceModelsButton.Location = new Point(VoiceModelComboBox.Right + 5, VoiceModelComboBox.Top);
+            this.refreshVoiceModelsButton.Location = new Point(speakerComboBox.Right + 5, VoiceModelComboBox.Top);
             this.refreshVoiceModelsButton.Cursor = Cursors.Hand;
             this.refreshVoiceModelsButton.FlatStyle = FlatStyle.Flat;
             this.refreshVoiceModelsButton.FlatAppearance.BorderSize = 0;
             this.refreshVoiceModelsButton.Click += new EventHandler(this.RefreshVoiceModels_Click);
             generalTab.Controls.Add(this.refreshVoiceModelsButton);
 
+            // Speed controls (moved up to where Speaker label was)
             Label speedLabel = new Label();
             speedLabel.Text = "Speed:";
             speedLabel.Location = new System.Drawing.Point(10, 95);
@@ -295,7 +320,7 @@ namespace PiperTray
 
             speedComboBox = new ComboBox();
             speedComboBox.Location = new System.Drawing.Point(10, 118);
-            speedComboBox.Width = 100;
+            speedComboBox.Width = 50;
             generalTab.Controls.Add(speedComboBox);
 
             for (int i = 1; i <= 10; i++)
@@ -354,6 +379,77 @@ namespace PiperTray
 
             Log($"[GetRefreshIcon] Embedded resource not found or failed to load");
             return null;
+        }
+
+        private void PopulateSpeakerComboBox(string modelName)
+        {
+            Log($"[PopulateSpeakerComboBox] Starting population with current speaker value: {speakerComboBox.SelectedItem}");
+            string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string jsonPath = Path.Combine(baseDir, $"{modelName}.onnx.json");
+
+            Log($"[PopulateSpeakerComboBox] Base directory: {baseDir}");
+            Log($"[PopulateSpeakerComboBox] Model name: {modelName}");
+            Log($"[PopulateSpeakerComboBox] Looking for JSON at: {jsonPath}");
+            Log($"[PopulateSpeakerComboBox] File exists: {File.Exists(jsonPath)}");
+
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    string jsonContent = File.ReadAllText(jsonPath);
+                    Log($"[PopulateSpeakerComboBox] JSON content loaded successfully");
+
+                    using JsonDocument doc = JsonDocument.Parse(jsonContent);
+                    var root = doc.RootElement;
+
+                    Log($"[PopulateSpeakerComboBox] JSON document parsed successfully");
+                    foreach (JsonProperty prop in root.EnumerateObject())
+                    {
+                        Log($"[PopulateSpeakerComboBox] Found root property: {prop.Name}");
+                    }
+
+                    if (root.TryGetProperty("num_speakers", out JsonElement numSpeakers))
+                    {
+                        int speakerCount = numSpeakers.GetInt32();
+                        Log($"[PopulateSpeakerComboBox] Found {speakerCount} speakers");
+
+                        speakerComboBox.Items.Clear();
+                        speakerIdMap.Clear();
+
+                        for (int i = 0; i < speakerCount; i++)
+                        {
+                            speakerComboBox.Items.Add(i.ToString());
+                            speakerIdMap[i.ToString()] = i;
+                        }
+
+                        if (speakerComboBox.Items.Count > 0)
+                        {
+                            speakerComboBox.SelectedIndex = 0;
+                            Log($"[PopulateSpeakerComboBox] Set default selection to 0");
+                            Log($"[PopulateSpeakerComboBox] Populated {speakerComboBox.Items.Count} speakers");
+                            Log($"[PopulateSpeakerComboBox] Current selection: {speakerComboBox.SelectedItem}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"[PopulateSpeakerComboBox] Error processing JSON: {ex.Message}");
+                    Log($"[PopulateSpeakerComboBox] Stack trace: {ex.StackTrace}");
+                }
+            }
+        }
+
+        private int GetSelectedSpeakerId()
+        {
+            if (speakerComboBox.SelectedItem != null)
+            {
+                string selectedName = speakerComboBox.SelectedItem.ToString();
+                if (speakerIdMap.TryGetValue(selectedName, out int id))
+                {
+                    return id;
+                }
+            }
+            return 0;
         }
 
         private void AddHotkeyControls(string labelText, int yPosition, string[] modifiers)
@@ -560,6 +656,7 @@ namespace PiperTray
 
         private void LoadSettingsIntoUI()
         {
+            isInitializing = true;
             string configPath = PiperTrayApp.GetInstance().GetConfigPath();
             Log($"Loading settings from: {configPath}");
 
@@ -590,6 +687,16 @@ namespace PiperTray
                     }
                 }
 
+                if (settings.TryGetValue("Speaker", out string speakerValue) &&
+                    int.TryParse(speakerValue, out int speaker))
+                {
+                    if (speakerComboBox.Items.Contains(speaker.ToString()))
+                    {
+                        speakerComboBox.SelectedItem = speaker.ToString();
+                        Log($"[LoadSettingsIntoUI] Set speaker to: {speaker}");
+                    }
+                }
+
                 if (settings.TryGetValue("Speed", out string speed))
                 {
                     if (double.TryParse(speed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double speedValue))
@@ -607,6 +714,7 @@ namespace PiperTray
             }
 
             _isInitialized = true;
+            isInitializing = false;
         }
 
 
@@ -1015,19 +1123,15 @@ namespace PiperTray
             return 0;
         }
 
-
         private void VoiceModelComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
-
             if (VoiceModelComboBox.SelectedItem != null)
             {
                 string selectedModel = VoiceModelComboBox.SelectedItem.ToString();
-
+                PopulateSpeakerComboBox(selectedModel);
                 SaveVoiceModelSetting(selectedModel);
-
                 OnVoiceModelChanged();
             }
-
         }
 
         private void SaveVoiceModelSetting(string modelName)
