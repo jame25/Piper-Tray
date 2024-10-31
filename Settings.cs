@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Windows.Forms;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 
 namespace PiperTray
 {
