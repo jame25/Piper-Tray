@@ -138,6 +138,7 @@ namespace PiperTray
         private bool isLoggingEnabled = false;
         private List<string> voiceModels;
         private int currentVoiceModelIndex = 0;
+        private int currentSpeaker = 0;
         private readonly double[] speedOptions = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 };
         private int currentSpeedIndex = 0; // Default to 1.0x speed
         private double currentSpeed = 1.0;
@@ -265,7 +266,8 @@ namespace PiperTray
                     settings.speedIncreaseHotkeyModifiers,
                     settings.speedIncreaseHotkeyVk,
                     settings.speedDecreaseHotkeyModifiers,
-                    settings.speedDecreaseHotkeyVk
+                    settings.speedDecreaseHotkeyVk,
+                    settings.speaker
                 );
 
                 // Keep the application running
@@ -434,15 +436,17 @@ namespace PiperTray
         }
 
         private void ApplySettings(string model, float speed, bool logging,
-            uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
-            uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
-            bool monitoringEnabled,
-            uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
-            uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk)
+    uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
+    uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
+    bool monitoringEnabled,
+    uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
+    uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk,
+    int speaker)
         {
             UpdateVoiceModel(model);
             UpdateSpeedFromSettings(speed);
             isLoggingEnabled = logging;
+            currentSpeaker = speaker;
             ApplyHotkeySettings(
                 monitoringHotkeyModifiers,
                 monitoringHotkeyVk,
@@ -454,6 +458,7 @@ namespace PiperTray
                 speedDecreaseHotkeyVk
             );
             ApplyMonitoringState(monitoringEnabled);
+            Log($"[ApplySettings] Applied settings - Model: {model}, Speed: {speed}, Logging: {logging}, Speaker: {speaker}");
         }
 
         public (bool success, uint errorCode) RegisterHotkey(int hotkeyId, uint modifiers, uint vk, string hotkeyName)
@@ -778,13 +783,13 @@ namespace PiperTray
 
         public bool IsMonitoringHotkeyRegistered()
         {
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
             return IsHotkeyRegistered(monitoringHotkeyModifiers, monitoringHotkeyVk);
         }
 
         public void LoadAndApplyHotkeySettings()
         {
-            var (_, _, _, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, _, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+            var (_, _, _, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, _, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
 
             UnregisterAllHotkeys();
 
@@ -1037,6 +1042,12 @@ namespace PiperTray
             }
 
             Log("[CycleVoiceModel] Exiting method");
+        }
+
+        public void UpdateCurrentSpeaker(int speakerId)
+        {
+            currentSpeaker = speakerId;
+            Log($"[UpdateCurrentSpeaker] Updated current speaker to: {speakerId}");
         }
 
         private void IncreaseSpeed()
@@ -1372,7 +1383,7 @@ namespace PiperTray
 
                 if (voiceModelState?.Models?.Any() == true)
                 {
-                    var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+                    var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
                     Log($"[RefreshVoiceModelList] Current model from settings: {model}");
 
                     if (!string.IsNullOrEmpty(model))
@@ -1474,7 +1485,7 @@ namespace PiperTray
 
         private void SettingsForm_VoiceModelChanged(object sender, EventArgs e)
         {
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
 
             UpdateVoiceModelAndRefresh(model);
 
@@ -1552,7 +1563,7 @@ namespace PiperTray
             }
         }
 
-        private (string model, float speed, bool logging, uint monitoringHotkeyModifiers, uint monitoringHotkeyVk, uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk, bool monitoringEnabled, uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk, uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk) ReadSettings()
+        private (string model, float speed, bool logging, uint monitoringHotkeyModifiers, uint monitoringHotkeyVk, uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk, bool monitoringEnabled, uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk, uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk, int speaker) ReadSettings()
         {
             string settingsPath = GetConfigPath();
             string model = "";
@@ -1567,6 +1578,7 @@ namespace PiperTray
             uint speedDecreaseHotkeyModifiers = 0;
             uint speedDecreaseHotkeyVk = 0;
             bool monitoringEnabled = true;
+            int speaker = 0;
             bool defaultsUsed = false;
 
             if (!File.Exists(settingsPath))
@@ -1630,6 +1642,9 @@ namespace PiperTray
                             case "MonitoringEnabled":
                                 bool.TryParse(parts[1].Trim(), out monitoringEnabled);
                                 break;
+                            case "Speaker":
+                                int.TryParse(parts[1].Trim(), out speaker);
+                                break;
                         }
                     }
                 }
@@ -1641,7 +1656,7 @@ namespace PiperTray
             }
 
             Log($"Voice model read from settings: {model}");
-            return (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk);
+            return (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker);
         }
 
         private void ApplyMonitoringState(bool enabled)
@@ -1706,13 +1721,13 @@ namespace PiperTray
             }
 
             var processedText = processedTextBuilder.ToString();
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
 
             Log($"Initializing Piper process with model: {model}");
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = piperPath,
-                Arguments = $"--model {model}.onnx --output-raw --length-scale {speed.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                Arguments = $"--model {model}.onnx --output-raw --length-scale {speed.ToString(System.Globalization.CultureInfo.InvariantCulture)} --speaker {currentSpeaker}",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -1914,21 +1929,23 @@ namespace PiperTray
 
         private void Exit(object sender, EventArgs e)
         {
-            try
+            // Stop all background operations
+            clipboardTimer?.Stop();
+            UnregisterAllHotkeys();
+
+            // Clean up tray icon
+            if (trayIcon != null)
             {
-                UnregisterAllHotkeys();
-                clipboardTimer.Stop();
                 trayIcon.Visible = false;
-                Application.Exit();
+                trayIcon.Dispose();
+                trayIcon = null;
             }
-            catch (Exception ex)
-            {
-                Log($"Error in Exit: {ex.Message}");
-                Log($"Stack trace: {ex.StackTrace}");
-            }
+
+            // Exit the application directly
+            Environment.Exit(0);
         }
 
-        public void SaveSettings(double? speed = null, string voiceModel = null)
+        public void SaveSettings(double? speed = null, string voiceModel = null, int? speaker = null)
         {
             Log($"[SaveSettings] Entering method. Saving current settings to file.");
             string configPath = GetConfigPath();
@@ -1941,6 +1958,10 @@ namespace PiperTray
             if (!string.IsNullOrEmpty(voiceModel))
             {
                 UpdateOrAddSetting(lines, "VoiceModel", Path.GetFileName(voiceModel));
+            }
+            if (speaker.HasValue)
+            {
+                UpdateOrAddSetting(lines, "Speaker", speaker.Value.ToString());
             }
 
             UpdateOrAddSetting(lines, "Logging", isLoggingEnabled.ToString());
@@ -2055,7 +2076,7 @@ namespace PiperTray
                 var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk,
                     changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled,
                     speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk,
-                    speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk) = ReadSettings();
+                    speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker) = ReadSettings();
                 UnregisterAllHotkeys();
                 trayIcon?.Dispose();
             }
