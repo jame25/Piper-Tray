@@ -1660,14 +1660,14 @@ namespace PiperTray
 
         private (HashSet<string> ignoreWords, HashSet<string> bannedWords, Dictionary<string, string> replaceWords) LoadDictionaries()
         {
-            var ignoreWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var ignoreWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "#", "*" };
             var bannedWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var replaceWords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
 
             if (File.Exists(Path.Combine(baseDir, "ignore.dict")))
-                ignoreWords = new HashSet<string>(File.ReadAllLines(Path.Combine(baseDir, "ignore.dict")), StringComparer.OrdinalIgnoreCase);
+                ignoreWords.UnionWith(File.ReadAllLines(Path.Combine(baseDir, "ignore.dict")));
 
             if (File.Exists(Path.Combine(baseDir, "banned.dict")))
                 bannedWords = new HashSet<string>(File.ReadAllLines(Path.Combine(baseDir, "banned.dict")), StringComparer.OrdinalIgnoreCase);
@@ -1788,6 +1788,8 @@ namespace PiperTray
 
         private string ProcessLine(string line)
         {
+            line = line.Replace("#", "").Replace("*", "");
+
             var words = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var processedWords = new List<string>();
 
