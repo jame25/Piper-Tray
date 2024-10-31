@@ -36,7 +36,7 @@ Piper Tray should support all available Piper voice models, by default **en_US-l
 
 You can change the voice model being utilized by Piper Tray by editing the first line of the **settings.conf**.
 
-Speech rate can be altered using the 'speed' variable (1.0 is the default speed, lower value i.e 0.5 = faster).
+Speech rate can be altered using the 'speed' variable (1 is the default speed, higher values i.e 5 = faster).
 
 ## Dictionary Rules:
 
