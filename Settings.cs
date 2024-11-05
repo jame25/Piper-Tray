@@ -23,6 +23,9 @@ namespace PiperTray
         private int currentSpeaker = 0;
         private Dictionary<string, int> speakerIdMap = new Dictionary<string, int>();
 
+        private NumericUpDown sentenceSilenceNumeric;
+        private Label sentenceSilenceLabel;
+
         public event EventHandler VoiceModelChanged;
         public event EventHandler<double> SpeedChanged;
         protected virtual void OnVoiceModelChanged()
@@ -313,7 +316,7 @@ namespace PiperTray
             this.refreshVoiceModelsButton.Click += new EventHandler(this.RefreshVoiceModels_Click);
             generalTab.Controls.Add(this.refreshVoiceModelsButton);
 
-            // Speed controls (moved up to where Speaker label was)
+            // Speed controls
             Label speedLabel = new Label();
             speedLabel.Text = "Speed:";
             speedLabel.Location = new System.Drawing.Point(10, 95);
@@ -329,6 +332,23 @@ namespace PiperTray
                 speedComboBox.Items.Add(i.ToString());
             }
             speedComboBox.SelectedIndex = 9; // Default to 1.0x speed
+
+            // Sentence Silence controls
+            Label sentenceSilenceLabel = new Label();
+            sentenceSilenceLabel.Text = "Sentence Silence:";
+            sentenceSilenceLabel.Location = new System.Drawing.Point(10, 150);
+            generalTab.Controls.Add(sentenceSilenceLabel);
+
+            sentenceSilenceNumeric = new NumericUpDown();
+            sentenceSilenceNumeric.Location = new System.Drawing.Point(10, 173);
+            sentenceSilenceNumeric.Width = 60;
+            sentenceSilenceNumeric.DecimalPlaces = 2;
+            sentenceSilenceNumeric.Increment = 0.1m;
+            sentenceSilenceNumeric.Minimum = 0.0m;
+            sentenceSilenceNumeric.Maximum = 2.0m;
+            sentenceSilenceNumeric.Value = 0.5m;
+            sentenceSilenceNumeric.ValueChanged += SentenceSilenceNumeric_ValueChanged;
+            generalTab.Controls.Add(sentenceSilenceNumeric);
 
             this.Controls.Add(tabControl);
 
@@ -451,6 +471,12 @@ namespace PiperTray
                 }
             }
             return 0;
+        }
+
+        private void SentenceSilenceNumeric_ValueChanged(object sender, EventArgs e)
+        {
+            float newSilence = (float)sentenceSilenceNumeric.Value;
+            PiperTrayApp.GetInstance().SaveSettings(sentenceSilence: newSilence);
         }
 
         private void AddHotkeyControls(string labelText, int yPosition, string[] modifiers)
@@ -1025,7 +1051,8 @@ namespace PiperTray
             uint speedIncreaseModifiers,
             uint speedIncreaseVk,
             uint speedDecreaseModifiers,
-            uint speedDecreaseVk)
+            uint speedDecreaseVk,
+            float sentenceSilence)
         {
             string configPath = PiperTrayApp.GetInstance().GetConfigPath();
             try
@@ -1047,6 +1074,7 @@ namespace PiperTray
                 UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
                 UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
                 UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
+                UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
 
                 File.WriteAllLines(configPath, lines);
                 Log($"Settings saved successfully.");
@@ -1186,6 +1214,10 @@ namespace PiperTray
                 double speedValue = GetSpeedValue(speedComboBox.SelectedIndex);
                 Log($"[SaveButton_Click] New speed value: {speedValue}");
 
+                // Get sentence silence value
+                float sentenceSilence = (float)sentenceSilenceNumeric.Value;
+                Log($"[SaveButton_Click] New sentence silence value: {sentenceSilence}");
+
                 // Get all current hotkey values
                 uint monitoringModifiers = monitoringModifierComboBox?.SelectedItem != null ?
                     GetModifierVirtualKeyCode(monitoringModifierComboBox.SelectedItem.ToString()) : 0;
@@ -1217,11 +1249,17 @@ namespace PiperTray
 
                 // Save all settings including hotkeys
                 SaveSettings(
-                    monitoringModifiers, monitoringVk,
-                    this.stopSpeechModifiers, this.stopSpeechVk,  // Use class-level variables
-                    changeVoiceModifiers, changeVoiceVk,
-                    speedIncreaseModifiers, speedIncreaseVk,
-                    speedDecreaseModifiers, speedDecreaseVk
+                    monitoringModifiers,
+                    monitoringVk,
+                    this.stopSpeechModifiers,
+                    this.stopSpeechVk,
+                    changeVoiceModifiers,
+                    changeVoiceVk,
+                    speedIncreaseModifiers,
+                    speedIncreaseVk,
+                    speedDecreaseModifiers,
+                    speedDecreaseVk,
+                    (float)sentenceSilenceNumeric.Value
                 );
 
                 // Update speed in main app
