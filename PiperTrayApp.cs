@@ -1815,18 +1815,14 @@ namespace PiperTray
 
         private string ProcessLine(string line)
         {
+            Log($"Step 1 - Raw input: {line}");
 
-            // Remove unwanted characters while preserving punctuation
             line = line.Replace("#", "").Replace("*", "");
+            Log($"Step 2 - After character cleanup: {line}");
 
-            // Track quoted text transformations
-            var matches = Regex.Matches(line, @"""(\w+)""");
-            foreach (Match m in matches)
-            {
-                Log($"Found quoted text: {m.Value}, Word inside quotes: {m.Groups[1].Value}");
-            }
+            line = Regex.Replace(line, @"(\w+)([.!?])(\s*)$", "$1, . . . . . . . $2$3");
 
-            // Process text with detailed logging
+            char[] preservePunctuation = { '.', ',', '?', '!', ':', ';' };
             var words = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var processedWords = new List<string>();
 
@@ -1835,11 +1831,19 @@ namespace PiperTray
                 if (!ignoreWords.Contains(word))
                 {
                     var processedWord = ApplyReplacements(word);
+                    foreach (char punct in preservePunctuation)
+                    {
+                        if (word.EndsWith(punct.ToString()) && !processedWord.EndsWith(punct.ToString()))
+                        {
+                            processedWord += punct;
+                        }
+                    }
                     processedWords.Add(processedWord);
                 }
             }
 
             var result = string.Join(" ", processedWords);
+            Log($"Final processed output: {result}");
 
             return result;
         }
