@@ -1825,6 +1825,10 @@ namespace PiperTray
         {
             Log($"Step 1 - Raw input: {line}");
 
+            line = Regex.Replace(line, @"£(\d+)", "$1 pounds");
+            line = Regex.Replace(line, @"\$(\d+)", "$1 dollars");
+            line = Regex.Replace(line, @"€(\d+)", "$1 euros");
+
             line = line.Replace("#", "").Replace("*", "");
             Log($"Step 2 - After character cleanup: {line}");
 
