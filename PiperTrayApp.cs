@@ -271,6 +271,8 @@ namespace PiperTray
                     settings.sentenceSilence
                 );
 
+                RegisterHotkey(HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
+
                 // Keep the application running
                 Application.Run(this);
 
@@ -1825,9 +1827,40 @@ namespace PiperTray
         {
             Log($"Step 1 - Raw input: {line}");
 
+            // Currency abbreviations
+            line = Regex.Replace(line, @"GBP\s*(\d+)", "$1 pounds");
+            line = Regex.Replace(line, @"USD\s*(\d+)", "$1 dollars");
+            line = Regex.Replace(line, @"EUR\s*(\d+)", "$1 euros");
+            line = Regex.Replace(line, @"JPY\s*(\d+)", "$1 yen");
+            line = Regex.Replace(line, @"AUD\s*(\d+)", "$1 australian dollars");
+            line = Regex.Replace(line, @"CAD\s*(\d+)", "$1 canadian dollars");
+            line = Regex.Replace(line, @"CHF\s*(\d+)", "$1 swiss francs");
+            line = Regex.Replace(line, @"CNY\s*(\d+)", "$1 yuan");
+            line = Regex.Replace(line, @"INR\s*(\d+)", "$1 rupees");
+
+            // Currency symbols with decimals
+            line = Regex.Replace(line, @"£(\d+)\.(\d{2})", "$1 pounds $2 pence");
             line = Regex.Replace(line, @"£(\d+)", "$1 pounds");
+
+            line = Regex.Replace(line, @"\$(\d+)\.(\d{2})", "$1 dollars $2 cents");
             line = Regex.Replace(line, @"\$(\d+)", "$1 dollars");
+
+            line = Regex.Replace(line, @"€(\d+)\.(\d{2})", "$1 euros $2 cents");
             line = Regex.Replace(line, @"€(\d+)", "$1 euros");
+
+            line = Regex.Replace(line, @"¥(\d+)", "$1 yen");
+            line = Regex.Replace(line, @"₹(\d+)", "$1 rupees");
+            line = Regex.Replace(line, @"₣(\d+)", "$1 francs");
+            line = Regex.Replace(line, @"元(\d+)", "$1 yuan");
+
+            // Handle currency at the end of amount
+            line = Regex.Replace(line, @"(\d+)\s*pounds?", "$1 pounds");
+            line = Regex.Replace(line, @"(\d+)\s*dollars?", "$1 dollars");
+            line = Regex.Replace(line, @"(\d+)\s*euros?", "$1 euros");
+            line = Regex.Replace(line, @"(\d+)\s*yen", "$1 yen");
+            line = Regex.Replace(line, @"(\d+)\s*rupees?", "$1 rupees");
+            line = Regex.Replace(line, @"(\d+)\s*francs?", "$1 francs");
+            line = Regex.Replace(line, @"(\d+)\s*yuan", "$1 yuan");
 
             line = line.Replace("#", "").Replace("*", "");
             Log($"Step 2 - After character cleanup: {line}");
