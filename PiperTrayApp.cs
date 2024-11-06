@@ -437,13 +437,13 @@ namespace PiperTray
         }
 
         private void ApplySettings(string model, float speed, bool logging,
-    uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
-    uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
-    bool monitoringEnabled,
-    uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
-    uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk,
-    int speaker,
-    float sentenceSilence)
+            uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
+            uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
+            bool monitoringEnabled,
+            uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
+            uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk,
+            int speaker,
+            float sentenceSilence)
         {
             UpdateVoiceModel(model);
             UpdateSpeedFromSettings(speed);
@@ -460,8 +460,15 @@ namespace PiperTray
                 speedDecreaseHotkeyVk
             );
             ApplyMonitoringState(monitoringEnabled);
+
+            if (settingsForm != null)
+            {
+                settingsForm.UpdateSentenceSilence(sentenceSilence);
+            }
+
             Log($"[ApplySettings] Applied settings - Model: {model}, Speed: {speed}, Logging: {logging}, Speaker: {speaker}, Sentence Silence: {sentenceSilence}");
         }
+
 
         public (bool success, uint errorCode) RegisterHotkey(int hotkeyId, uint modifiers, uint vk, string hotkeyName)
         {
@@ -1581,7 +1588,7 @@ namespace PiperTray
             uint speedDecreaseHotkeyVk = 0;
             bool monitoringEnabled = true;
             int speaker = 0;
-            float sentenceSilence = 0.5f;
+            float sentenceSilence = 0.2f;
             bool defaultsUsed = false;
 
             if (!File.Exists(settingsPath))
@@ -1652,6 +1659,7 @@ namespace PiperTray
                                 if (float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float parsedSilence))
                                 {
                                     sentenceSilence = parsedSilence;
+                                    Log($"[ReadSettings] Parsed SentenceSilence value: {sentenceSilence}");
                                 }
                                 break;
                         }
@@ -2004,7 +2012,7 @@ namespace PiperTray
             }
             if (sentenceSilence.HasValue)
             {
-                UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
+                UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
             }
 
             UpdateOrAddSetting(lines, "Logging", isLoggingEnabled.ToString());
