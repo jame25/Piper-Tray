@@ -3,7 +3,6 @@
 
 Piper Tray is a small system tray utility for Windows, that utilizes [Piper](https://github.com/rhasspy/piper). It will read aloud the contents of your clipboard. You can stop the speech at any time via an assigned hotkey.
 
-[Piper Tray (Classic)](https://github.com/jame25/Piper-Tray-Classic) is a feature-frozen version of this application.
 If you would prefer a GUI, check out my other project: [Piper Read](https://github.com/jame25/piper-read).
 
 
