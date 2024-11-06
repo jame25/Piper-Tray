@@ -342,7 +342,7 @@ namespace PiperTray
             sentenceSilenceNumeric = new NumericUpDown();
             sentenceSilenceNumeric.Location = new System.Drawing.Point(10, 173);
             sentenceSilenceNumeric.Width = 60;
-            sentenceSilenceNumeric.DecimalPlaces = 2;
+            sentenceSilenceNumeric.DecimalPlaces = 1;
             sentenceSilenceNumeric.Increment = 0.1m;
             sentenceSilenceNumeric.Minimum = 0.0m;
             sentenceSilenceNumeric.Maximum = 2.0m;
@@ -471,6 +471,67 @@ namespace PiperTray
                 }
             }
             return 0;
+        }
+
+        private string GetConfigPath()
+        {
+            return Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "settings.conf");
+        }
+
+        private Dictionary<string, string> ReadCurrentSettings()
+        {
+            var settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string configPath = GetConfigPath();
+            if (File.Exists(configPath))
+            {
+                try
+                {
+                    foreach (var line in File.ReadAllLines(configPath))
+                    {
+                        var parts = line.Split(new[] { '=' }, 2);
+                        if (parts.Length == 2)
+                        {
+                            string key = parts[0].Trim();
+                            string value = parts[1].Trim();
+                            if (!settings.ContainsKey(key))
+                            {
+                                settings.Add(key, value);
+                            }
+                            else
+                            {
+                                Log($"[ReadCurrentSettings] Duplicate key '{key}' found in settings.conf. Ignoring duplicate.");
+                            }
+                        }
+                        else
+                        {
+                            Log($"[ReadCurrentSettings] Invalid line format: '{line}'. Skipping.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"[ReadCurrentSettings] Exception while reading settings: {ex.Message}");
+                }
+            }
+            else
+            {
+                Log("[ReadCurrentSettings] settings.conf not found. Returning empty settings.");
+            }
+            return settings;
+        }
+
+        private void InitializeSentenceSilence()
+        {
+            var settings = ReadCurrentSettings();
+            if (settings.TryGetValue("SentenceSilence", out string silenceValue))
+            {
+                if (float.TryParse(silenceValue, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float value))
+                {
+                    sentenceSilenceNumeric.Value = (decimal)value;
+                    Log($"[InitializeSentenceSilence] Set value to: {value}");
+                }
+            }
         }
 
         private void SentenceSilenceNumeric_ValueChanged(object sender, EventArgs e)
@@ -696,6 +757,8 @@ namespace PiperTray
                         line => line.Split('=')[1].Trim(),
                         StringComparer.OrdinalIgnoreCase
                     );
+
+                InitializeSentenceSilence();
 
                 if (settings.TryGetValue("Logging", out string logging))
                 {
@@ -1036,11 +1099,6 @@ namespace PiperTray
             return 0; // Default to first index if parsing fails
         }
 
-        private string GetConfigPath()
-        {
-            return Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "settings.conf");
-        }
-
         private void SaveSettings(
             uint monitoringModifiers,
             uint monitoringVk,
@@ -1074,7 +1132,7 @@ namespace PiperTray
                 UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
                 UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
                 UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
-                UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
+                UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
 
                 File.WriteAllLines(configPath, lines);
                 Log($"Settings saved successfully.");
@@ -1314,6 +1372,15 @@ namespace PiperTray
             Log($"[UpdateVoiceModels] Updating voice models with {newModels.Count} models");
             voiceModels = newModels;
             UpdateVoiceModelComboBox();
+        }
+
+        public void UpdateSentenceSilence(float value)
+        {
+            if (sentenceSilenceNumeric != null)
+            {
+                sentenceSilenceNumeric.Value = (decimal)value;
+                Log($"[UpdateSentenceSilence] Updated sentence silence value to: {value}");
+            }
         }
 
         private void UpdateVoiceModelComboBox()
