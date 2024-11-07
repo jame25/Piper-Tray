@@ -53,11 +53,13 @@ namespace PiperTray
         }
 
         private VoiceModelState voiceModelState;
+        private ToolStripMenuItem exportMenuItem;
 
         public class CustomVoiceMenuItem : ToolStripMenuItem
         {
             public bool IsSelected { get; set; }
             public bool CheckMarkEnabled { get; set; } = false;
+            public Color SelectionColor { get; set; } = Color.Green;
 
             protected override void OnPaint(PaintEventArgs e)
             {
@@ -84,6 +86,15 @@ namespace PiperTray
             }
         }
 
+        public class PresetSettings
+        {
+            public string Name { get; set; }
+            public string VoiceModel { get; set; }
+            public int Speaker { get; set; }
+            public double Speed { get; set; }
+            public float SentenceSilence { get; set; }
+        }
+
         public const int HOTKEY_ID_STOP_SPEECH = 9000;
         public const int HOTKEY_ID_MONITORING = 9001;
         public const int HOTKEY_ID_CHANGE_VOICE = 9002;
@@ -108,6 +119,9 @@ namespace PiperTray
             { "ć", "ch" } // Map 'ć' to a phonetic approximation
         };
 
+        private Dictionary<string, bool> menuVisibilitySettings = new Dictionary<string, bool>();
+        private Dictionary<string, ToolStripMenuItem> menuItems = new Dictionary<string, ToolStripMenuItem>();
+
         private HashSet<string> ignoreWords;
         private HashSet<string> bannedWords;
         private Dictionary<string, string> replaceWords;
@@ -116,6 +130,7 @@ namespace PiperTray
         private SettingsForm settingsForm;
         private ContextMenuStrip contextMenu;
         private ToolStripMenuItem toggleMonitoringMenuItem;
+        private ToolStripMenuItem presetsMenuItem;
         private ToolStripMenuItem speedMenuItem;
         private ToolStripMenuItem fasterMenuItem;
         private ToolStripMenuItem slowerMenuItem;
@@ -143,6 +158,8 @@ namespace PiperTray
         private int currentSpeedIndex = 0; // Default to 1.0x speed
         private double currentSpeed = 1.0;
 
+        private int currentPresetIndex = -1;
+
         private DateTime lastScanTime = DateTime.MinValue;
         private const int ScanCooldownSeconds = 5;
 
@@ -163,6 +180,53 @@ namespace PiperTray
             voiceMenuItem = new ToolStripMenuItem("Voice");
             settingsMenuItem = new ToolStripMenuItem("Settings");
             exitMenuItem = new ToolStripMenuItem("Exit");
+
+            menuItems["Monitoring"] = toggleMonitoringMenuItem;
+            menuItems["Speed"] = speedMenuItem;
+            menuItems["Voice"] = voiceMenuItem;
+            menuItems["Presets"] = presetsMenuItem;
+            menuItems["Export to WAV"] = exportMenuItem;
+
+            // Load initial visibility settings
+            LoadMenuVisibilitySettings();
+            ApplyMenuVisibility();
+        }
+
+        private void LoadMenuVisibilitySettings()
+        {
+            var settings = ReadCurrentSettings();
+            foreach (var menuKey in menuItems.Keys)
+            {
+                string settingKey = $"MenuVisible_{menuKey.Replace(" ", "_")}";
+                if (settings.TryGetValue(settingKey, out string value))
+                {
+                    menuVisibilitySettings[menuKey] = bool.Parse(value);
+                }
+                else
+                {
+                    menuVisibilitySettings[menuKey] = true; // Default to visible
+                }
+            }
+        }
+
+        private void ApplyMenuVisibility()
+        {
+            foreach (var kvp in menuItems)
+            {
+                if (menuVisibilitySettings.TryGetValue(kvp.Key, out bool isVisible))
+                {
+                    kvp.Value.Visible = isVisible;
+                }
+            }
+        }
+
+        public void UpdateMenuVisibility(string menuItem, bool isVisible)
+        {
+            if (menuItems.TryGetValue(menuItem, out ToolStripMenuItem item))
+            {
+                menuVisibilitySettings[menuItem] = isVisible;
+                item.Visible = isVisible;
+            }
         }
 
         protected override void CreateHandle()
@@ -174,23 +238,38 @@ namespace PiperTray
         {
             try
             {
+                // Initialize voiceModelState first
+                voiceModelState = new VoiceModelState
+                {
+                    CurrentIndex = 0,
+                    Models = new List<string>(),
+                    IsDirty = false
+                };
+
+                // Load voice models
+                LoadVoiceModels();
 
                 CreateNotifyIcon();
 
+                // Initialize menu items
                 toggleMonitoringMenuItem = new ToolStripMenuItem("Monitoring", null, SafeEventHandler(ToggleMonitoring))
                 {
                     Checked = true
                 };
+                Log($"[InitializeComponent] Created toggleMonitoringMenuItem with ToggleMonitoring handler");
                 voiceMenuItem = new ToolStripMenuItem("Voice");
-                int insertIndex = Math.Min(2, trayIcon.ContextMenuStrip.Items.Count);
-                trayIcon.ContextMenuStrip.Items.Insert(insertIndex, voiceMenuItem);
-
                 speedMenuItem = new ToolStripMenuItem("Speed");
+                exportMenuItem = new ToolStripMenuItem("Export to WAV", null, SafeEventHandler(ExportWav));
+                presetsMenuItem = new ToolStripMenuItem("Presets");
 
+                // Initialize the menuItems dictionary
+                menuItems = new Dictionary<string, ToolStripMenuItem>();
+
+                InitializeMenuItems();
+
+                // Continue with the rest of your InitializeComponent code
                 fasterMenuItem = new ToolStripMenuItem("Faster", null, (sender, e) => IncreaseSpeed());
-
                 slowerMenuItem = new ToolStripMenuItem("Slower", null, (sender, e) => DecreaseSpeed());
-
                 resetSpeedMenuItem = new ToolStripMenuItem("Reset", null, (sender, e) => ResetSpeed(sender, e));
 
                 speedMenuItem.DropDownItems.Add(fasterMenuItem);
@@ -199,25 +278,13 @@ namespace PiperTray
 
                 exitMenuItem = new ToolStripMenuItem("Exit", null, SafeEventHandler(Exit));
 
-                trayIcon.ContextMenuStrip.Items.Add(toggleMonitoringMenuItem);
-
-
-                trayIcon.ContextMenuStrip.Items.Add(speedMenuItem);
-
-                trayIcon.ContextMenuStrip.Items.Add(voiceMenuItem);
-
-                var settingsMenuItem = new ToolStripMenuItem("Settings", null, SafeEventHandler(OpenSettings));
-                trayIcon.ContextMenuStrip.Items.Add(settingsMenuItem);
-                trayIcon.ContextMenuStrip.Items.Add(exitMenuItem);
-
+                PopulateContextMenu();
 
                 this.FormBorderStyle = FormBorderStyle.None;
                 this.ShowInTaskbar = false;
                 this.WindowState = FormWindowState.Minimized;
 
                 UpdateSpeedDisplay();
-
-
             }
             catch (Exception ex)
             {
@@ -254,6 +321,7 @@ namespace PiperTray
                 // Load settings and models
                 LoadVoiceModels();
                 var settings = ReadSettings();
+                ApplyMonitoringState(settings.monitoringEnabled);
                 ApplySettings(
                     settings.model,
                     settings.speed,
@@ -346,7 +414,7 @@ namespace PiperTray
         {
             if (trayIcon != null)
             {
-                return; // NotifyIcon already created
+                return;
             }
 
             var icon = LoadIconFromResources();
@@ -363,11 +431,14 @@ namespace PiperTray
                 Text = "Piper Tray"
             };
 
-            // Set up context menu items
-            trayIcon.ContextMenuStrip.Opening += ContextMenuStrip_Opening;
+            // Add logging for menu click events
+            trayIcon.MouseClick += (s, e) => Log($"[CreateNotifyIcon] Tray icon clicked: {e.Button}");
+            trayIcon.ContextMenuStrip.Opening += (s, e) => Log($"[CreateNotifyIcon] Context menu opening");
+            trayIcon.ContextMenuStrip.ItemClicked += (s, e) => Log($"[CreateNotifyIcon] Menu item clicked: {e.ClickedItem.Text}");
 
-            // Add other necessary setup for the tray icon here
+            trayIcon.ContextMenuStrip.Opening += ContextMenuStrip_Opening;
         }
+
         private void LogEmbeddedResources()
         {
             var assembly = Assembly.GetExecutingAssembly();
@@ -857,6 +928,113 @@ namespace PiperTray
             Log($"[WndProc] Message 0x{m.Msg:X4} processed");
         }
 
+
+        private void AddPresetsToContextMenu()
+        {
+            presetsMenuItem.DropDownItems.Clear();
+            for (int i = 0; i < 4; i++)
+            {
+                var settings = LoadPreset(i);
+                string presetName = settings?.Name ?? $"Preset {i + 1}";
+                var presetItem = new CustomVoiceMenuItem
+                {
+                    Text = presetName,
+                    IsSelected = (i == currentPresetIndex),
+                    SelectionColor = Color.LightBlue
+                };
+                int presetIndex = i;
+                presetItem.Click += (s, e) =>
+                {
+                    ApplyPreset(presetIndex);
+                    currentPresetIndex = presetIndex;
+                    UpdatePresetMenuSelection(presetIndex);
+                };
+                presetsMenuItem.DropDownItems.Add(presetItem);
+            }
+
+            // Load and apply the last used preset index
+            var lastUsedPresetIndex = ReadSettingValue("LastUsedPreset");
+            if (!string.IsNullOrEmpty(lastUsedPresetIndex) && int.TryParse(lastUsedPresetIndex, out int savedIndex))
+            {
+                currentPresetIndex = savedIndex;
+                UpdatePresetMenuSelection(savedIndex);
+            }
+        }
+
+        private void SaveLastUsedPreset(int presetIndex)
+        {
+            string configPath = GetConfigPath();
+            var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+            UpdateOrAddSetting(lines, "LastUsedPreset", presetIndex.ToString());
+            File.WriteAllLines(configPath, lines);
+        }
+
+        private void UpdatePresetMenuSelection(int selectedIndex)
+        {
+            foreach (ToolStripItem item in presetsMenuItem.DropDownItems)
+            {
+                if (item is CustomVoiceMenuItem customItem)
+                {
+                    customItem.IsSelected = (presetsMenuItem.DropDownItems.IndexOf(item) == selectedIndex);
+                }
+            }
+            trayIcon.ContextMenuStrip.Refresh();
+        }
+
+        private void UpdatePresetMenuChecks(int selectedIndex)
+        {
+            foreach (ToolStripItem item in presetsMenuItem.DropDownItems)
+            {
+                if (item is ToolStripMenuItem menuItem)
+                {
+                    menuItem.Checked = (presetsMenuItem.DropDownItems.IndexOf(item) == selectedIndex);
+                }
+            }
+        }
+
+        public void ApplyPreset(int presetIndex)
+        {
+            var settings = LoadPreset(presetIndex);
+            if (settings != null)
+            {
+                UpdateVoiceModel(settings.VoiceModel);
+                UpdateCurrentSpeaker(settings.Speaker);
+                UpdateSpeedFromSettings(settings.Speed);
+                SaveSettings(
+                    speed: settings.Speed,
+                    voiceModel: settings.VoiceModel,
+                    speaker: settings.Speaker,
+                    sentenceSilence: settings.SentenceSilence
+                );
+                currentPresetIndex = presetIndex;
+                SaveLastUsedPreset(presetIndex);
+                UpdatePresetMenuSelection(presetIndex);
+            }
+        }
+
+        public PresetSettings LoadPreset(int index)
+        {
+            string configPath = GetConfigPath();
+            var settings = ReadCurrentSettings();
+            string presetKey = $"Preset{index + 1}";
+
+            if (settings.TryGetValue(presetKey, out string presetJson))
+            {
+                return JsonSerializer.Deserialize<PresetSettings>(presetJson);
+            }
+            return null;
+        }
+
+        public void SavePreset(int index, PresetSettings settings)
+        {
+            string configPath = GetConfigPath();
+            var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+            string presetKey = $"Preset{index + 1}";
+            string presetJson = JsonSerializer.Serialize(settings);
+            UpdateOrAddSetting(lines, presetKey, presetJson);
+            File.WriteAllLines(configPath, lines);
+        }
+
         private void InitializeClipboardMonitoring()
         {
             clipboardTimer = new System.Windows.Forms.Timer();
@@ -955,32 +1133,46 @@ namespace PiperTray
 
         public void ToggleMonitoring(object sender, EventArgs e)
         {
-            Log($"Entering ToggleMonitoring method");
+            Log($"[ToggleMonitoring] Starting toggle operation. Current state: {isMonitoring}");
             try
             {
-                Log($"Current monitoring state: {isMonitoring}");
+                isMonitoring = !isMonitoring;
+                Log($"[ToggleMonitoring] State toggled to: {isMonitoring}");
+
+                toggleMonitoringMenuItem.Checked = isMonitoring;
+                Log($"[ToggleMonitoring] Menu item checked state updated: {toggleMonitoringMenuItem.Checked}");
+
                 if (isMonitoring)
                 {
-                    Log($"Attempting to stop monitoring");
-                    StopMonitoring();
-                    Log($"StopMonitoring completed");
+                    Log($"[ToggleMonitoring] Calling StartMonitoring()");
+                    StartMonitoring();
                 }
                 else
                 {
-                    Log($"Attempting to start monitoring");
-                    StartMonitoring();
-                    Log($"StartMonitoring completed");
+                    Log($"[ToggleMonitoring] Calling StopMonitoring()");
+                    StopMonitoring();
                 }
-                Log($"Saving monitoring state");
-                SaveMonitoringState(isMonitoring);
-                Log($"Monitoring state saved. New state: {isMonitoring}");
+
+                string configPath = GetConfigPath();
+                Log($"[ToggleMonitoring] Config path: {configPath}");
+                Log($"[ToggleMonitoring] Config file exists: {File.Exists(configPath)}");
+
+                SaveSettings();
+                Log($"[ToggleMonitoring] SaveSettings() called");
+
+                // Verify the save
+                var currentSettings = ReadCurrentSettings();
+                Log($"[ToggleMonitoring] Verification - MonitoringEnabled in settings: {currentSettings.GetValueOrDefault("MonitoringEnabled")}");
+
+                toggleMonitoringMenuItem.Text = isMonitoring ? "Monitoring (On)" : "Monitoring (Off)";
+                Log($"[ToggleMonitoring] Menu text updated to: {toggleMonitoringMenuItem.Text}");
             }
             catch (Exception ex)
             {
-                Log($"Error in ToggleMonitoring: {ex.Message}");
-                Log($"Stack trace: {ex.StackTrace}");
+                Log($"[ToggleMonitoring] Error occurred: {ex.Message}");
+                Log($"[ToggleMonitoring] Stack trace: {ex.StackTrace}");
             }
-            Log($"Exiting ToggleMonitoring method");
+            Log($"[ToggleMonitoring] Toggle operation completed");
         }
 
         private void SaveMonitoringState(bool enabled)
@@ -1328,7 +1520,8 @@ namespace PiperTray
                 {
                     Text = model,
                     IsSelected = (Path.GetFileNameWithoutExtension(model) == currentModel),
-                    CheckMarkEnabled = false  // Add this property to disable the checkmark
+                    SelectionColor = Color.Green,
+                    CheckMarkEnabled = false
                 };
                 item.Click += VoiceMenuItem_Click;
                 voiceMenuItem.DropDownItems.Add(item);
@@ -1469,14 +1662,97 @@ namespace PiperTray
 
         private void PopulateContextMenu()
         {
+            Log("[PopulateContextMenu] Starting menu population");
+
+            toggleMonitoringMenuItem = new ToolStripMenuItem("Monitoring")
+            {
+                Checked = isMonitoring
+            };
+            toggleMonitoringMenuItem.Click += (s, e) =>
+            {
+                Log("[PopulateContextMenu] Monitoring menu item clicked");
+                ToggleMonitoring(s, e);
+            };
+
             trayIcon.ContextMenuStrip.Items.Add(toggleMonitoringMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(speedMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(voiceMenuItem);
             PopulateVoiceMenu();
+            presetsMenuItem = new ToolStripMenuItem("Presets");
+            AddPresetsToContextMenu();
+
+            exportMenuItem = new ToolStripMenuItem("Export to WAV", null, SafeEventHandler(ExportWav));
+
+            // Apply visibility setting before adding to the menu
+            if (menuVisibilitySettings.TryGetValue("Export to WAV", out bool isVisible))
+            {
+                exportMenuItem.Visible = isVisible;
+            }
+
+            trayIcon.ContextMenuStrip.Items.Add(exportMenuItem);
+            trayIcon.ContextMenuStrip.Items.Add(presetsMenuItem);
             var settingsMenuItem = new ToolStripMenuItem("Settings", null, SafeEventHandler(OpenSettings));
             trayIcon.ContextMenuStrip.Items.Add(settingsMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(exitMenuItem);
         }
+
+        private async void ExportWav(object sender, EventArgs e)
+        {
+            using (SaveFileDialog saveDialog = new SaveFileDialog())
+            {
+                saveDialog.Filter = "WAV files (*.wav)|*.wav";
+                saveDialog.DefaultExt = "wav";
+
+                if (saveDialog.ShowDialog() == DialogResult.OK)
+                {
+                    string clipboardText = Clipboard.GetText();
+                    if (string.IsNullOrEmpty(clipboardText))
+                    {
+                        MessageBox.Show("No text in clipboard to convert.", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        var processedText = ProcessLine(clipboardText);
+                        var (model, speed, _, _, _, _, _, _, _, _, _, _, speaker, sentenceSilence) = ReadSettings();
+
+                        ProcessStartInfo psi = new ProcessStartInfo
+                        {
+                            FileName = piperPath,
+                            Arguments = $"--model {model}.onnx --output-raw --length-scale {speed} --speaker {speaker} --sentence-silence {sentenceSilence}",
+                            UseShellExecute = false,
+                            RedirectStandardInput = true,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        };
+
+                        using (Process process = new Process())
+                        {
+                            process.StartInfo = psi;
+                            process.Start();
+
+                            using (var writer = new StreamWriter(process.StandardInput.BaseStream, Encoding.UTF8))
+                            {
+                                await writer.WriteLineAsync(processedText);
+                                writer.Close();
+                            }
+
+                            await process.StandardOutput.BaseStream.CopyToAsync(memoryStream);
+                            memoryStream.Position = 0;
+
+                            using (var rawStream = new RawSourceWaveStream(memoryStream, new WaveFormat(22050, 16, 1)))
+                            using (var waveStream = new WaveFileWriter(saveDialog.FileName, rawStream.WaveFormat))
+                            {
+                                await rawStream.CopyToAsync(waveStream);
+                            }
+                        }
+                    }
+                    MessageBox.Show($"Audio exported successfully to {saveDialog.FileName}", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+        }
+
 
         private void OpenSettings(object sender, EventArgs e)
         {
@@ -2034,6 +2310,8 @@ namespace PiperTray
             Log($"[SaveSettings] Entering method. Saving current settings to file.");
             string configPath = GetConfigPath();
             var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+
+            UpdateOrAddSetting(lines, "MonitoringEnabled", isMonitoring.ToString());
 
             if (speed.HasValue)
             {
