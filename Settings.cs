@@ -16,6 +16,8 @@ namespace PiperTray
         private static readonly object _lock = new object();
         public TabControl TabControl => tabControl;
         public TabPage GeneralTab => generalTab;
+        private TabPage appearanceTab;
+        private Dictionary<string, CheckBox> menuVisibilityCheckboxes;
         private readonly double[] speedOptions = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 };
         private string currentVoiceModel;
 
@@ -37,6 +39,23 @@ namespace PiperTray
         private TabControl tabControl;
         private TabPage generalTab;
         private TabPage hotkeysTab;
+        private TabPage presetsTab;
+        private ComboBox[] presetVoiceModelComboBoxes;
+        private ComboBox[] presetSpeakerComboBoxes;
+        private ComboBox[] presetSpeedComboBoxes;
+        private TextBox[] presetNameTextBoxes;
+
+        public class PresetSettings
+        {
+            public string Name { get; set; }
+            public string VoiceModel { get; set; }
+            public int Speaker { get; set; }
+            public double Speed { get; set; }
+            public float SentenceSilence { get; set; }
+        }
+
+        private NumericUpDown[] presetSilenceNumericUpDowns;
+        private Button[] presetApplyButtons;
         private CheckBox loggingCheckBox;
         private ComboBox VoiceModelComboBox;
         private List<string> voiceModels;
@@ -174,6 +193,34 @@ namespace PiperTray
 
         }
 
+        private void PopulateVoiceModelComboBox(ComboBox comboBox)
+        {
+            comboBox.Items.Clear();
+            string[] voiceModels = Directory.GetFiles(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                "*.onnx"
+            ).Select(Path.GetFileNameWithoutExtension).ToArray();
+
+            comboBox.Items.AddRange(voiceModels);
+            if (comboBox.Items.Count > 0)
+                comboBox.SelectedIndex = 0;
+        }
+
+        private void ApplyPreset(int index)
+        {
+            var preset = new PiperTrayApp.PresetSettings
+            {
+                Name = presetNameTextBoxes[index].Text,
+                VoiceModel = presetVoiceModelComboBoxes[index].SelectedItem?.ToString(),
+                Speaker = int.Parse(presetSpeakerComboBoxes[index].SelectedItem?.ToString() ?? "0"),
+                Speed = GetSpeedValue(presetSpeedComboBoxes[index].SelectedIndex),
+                SentenceSilence = (float)presetSilenceNumericUpDowns[index].Value
+            };
+
+            PiperTrayApp.GetInstance().SavePreset(index, preset);
+            PiperTrayApp.GetInstance().ApplyPreset(index);
+        }
+
         private void speakerComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (!isInitializing && speakerComboBox.SelectedItem != null)
@@ -269,10 +316,29 @@ namespace PiperTray
             tabControl.Dock = DockStyle.Fill;
 
             generalTab = new TabPage("General");
+            appearanceTab = new TabPage("Appearance");
             hotkeysTab = new TabPage("Hotkeys");
+            presetsTab = new TabPage("Presets");
 
             tabControl.TabPages.Add(generalTab);
+            tabControl.TabPages.Add(appearanceTab);
             tabControl.TabPages.Add(hotkeysTab);
+            tabControl.TabPages.Add(presetsTab);
+
+            CreateMenuVisibilityControls();
+
+            presetVoiceModelComboBoxes = new ComboBox[4];
+            presetSpeakerComboBoxes = new ComboBox[4];
+            presetSpeedComboBoxes = new ComboBox[4];
+            presetSilenceNumericUpDowns = new NumericUpDown[4];
+            presetApplyButtons = new Button[4];
+            presetNameTextBoxes = new TextBox[4];
+
+            // Create preset panels
+            for (int i = 0; i < 4; i++)
+            {
+                CreatePresetPanel(i);
+            }
 
             // Hotkeys Tab
             string[] modifiers = new[] { "NONE", "ALT", "CTRL", "SHIFT" };
@@ -369,6 +435,234 @@ namespace PiperTray
             cancelButton.Click += CancelButton_Click;
 
             LoadVoiceModels();
+        }
+
+        private void CreateMenuVisibilityControls()
+        {
+            menuVisibilityCheckboxes = new Dictionary<string, CheckBox>();
+            string[] menuItems = new[] {
+        "Monitoring",
+        "Speed",
+        "Voice",
+        "Presets",
+        "Export to WAV"
+    };
+
+            Label headerLabel = new Label
+            {
+                Text = "Show/Hide Menu Items:",
+                Location = new Point(10, 10),
+                AutoSize = true
+            };
+            appearanceTab.Controls.Add(headerLabel);
+
+            int yOffset = 40;
+            foreach (string menuItem in menuItems)
+            {
+                var checkbox = new CheckBox
+                {
+                    Text = $"Show '{menuItem}'",
+                    Location = new Point(20, yOffset),
+                    Checked = true,
+                    AutoSize = true
+                };
+                checkbox.CheckedChanged += MenuVisibilityChanged;
+                menuVisibilityCheckboxes[menuItem] = checkbox;
+                appearanceTab.Controls.Add(checkbox);
+                yOffset += 30;
+            }
+        }
+
+        private void MenuVisibilityChanged(object sender, EventArgs e)
+        {
+            if (sender is CheckBox checkbox)
+            {
+                string menuItem = menuVisibilityCheckboxes.First(x => x.Value == checkbox).Key;
+                SaveMenuVisibilitySetting(menuItem, checkbox.Checked);
+                PiperTrayApp.GetInstance().UpdateMenuVisibility(menuItem, checkbox.Checked);
+            }
+        }
+
+        private void SaveMenuVisibilitySetting(string menuItem, bool isVisible)
+        {
+            string configPath = GetConfigPath();
+            var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+            UpdateOrAddSetting(lines, $"MenuVisible_{menuItem.Replace(" ", "_")}", isVisible.ToString());
+            File.WriteAllLines(configPath, lines);
+        }
+
+        private void LoadMenuVisibilitySettings()
+        {
+            foreach (var kvp in menuVisibilityCheckboxes)
+            {
+                string settingKey = $"MenuVisible_{kvp.Key.Replace(" ", "_")}";
+                string value = ReadSettingValue(settingKey);
+                bool isVisible = string.IsNullOrEmpty(value) ? true : bool.Parse(value);
+                kvp.Value.Checked = isVisible;
+            }
+        }
+
+        private void CreatePresetPanel(int index)
+        {
+            int topMargin = 10;
+            int controlSpacing = 5;
+            int labelHeight = 20;
+            int controlHeight = 25;
+            int columnWidth = 100;
+            int rowSpacing = 35;
+
+            // Labels row (only show for first preset)
+            if (index == 0)
+            {
+                Label nameLabel = new Label
+                {
+                    Text = "Name",
+                    Location = new Point(10, topMargin),
+                    Width = columnWidth
+                };
+
+                Label voiceLabel = new Label
+                {
+                    Text = "Model",
+                    Location = new Point(nameLabel.Right + controlSpacing, topMargin),
+                    Width = columnWidth
+                };
+
+                Label speedLabel = new Label
+                {
+                    Text = "Speed",
+                    Location = new Point(voiceLabel.Right - (columnWidth / 2) + 105, topMargin),
+                    Width = columnWidth / 2
+                };
+
+                Label silenceLabel = new Label
+                {
+                    Text = "Silence",
+                    Location = new Point(speedLabel.Right + (controlSpacing / 4) + (columnWidth / 10) - 8, topMargin),
+                    Width = columnWidth
+                };
+
+                presetsTab.Controls.AddRange(new Control[] { nameLabel, voiceLabel, speedLabel, silenceLabel });
+            }
+
+            int rowY = topMargin + labelHeight + controlSpacing + (index * rowSpacing);
+
+            presetNameTextBoxes[index] = new TextBox
+            {
+                Location = new Point(10, rowY),
+                Width = (columnWidth - 4),
+                Text = $"Preset {index + 1}"
+            };
+            presetNameTextBoxes[index].TextChanged += (s, e) => UpdatePresetName(index);
+
+            presetVoiceModelComboBoxes[index] = new ComboBox
+            {
+                Location = new Point(presetNameTextBoxes[index].Right + controlSpacing, rowY),
+                Width = columnWidth
+            };
+            PopulateVoiceModelComboBox(presetVoiceModelComboBoxes[index]);
+            presetVoiceModelComboBoxes[index].SelectedIndexChanged += (s, e) => UpdatePresetSpeakers(index);
+
+            presetSpeakerComboBoxes[index] = new ComboBox
+            {
+                Location = new Point(presetVoiceModelComboBoxes[index].Right + controlSpacing, rowY),
+                Width = columnWidth / 2
+            };
+
+            presetSpeedComboBoxes[index] = new ComboBox
+            {
+                Location = new Point(presetSpeakerComboBoxes[index].Right + controlSpacing, rowY),
+                Width = columnWidth / 2
+            };
+            for (int i = 1; i <= 10; i++)
+            {
+                presetSpeedComboBoxes[index].Items.Add(i.ToString());
+            }
+
+            presetSilenceNumericUpDowns[index] = new NumericUpDown
+            {
+                Location = new Point(presetSpeedComboBoxes[index].Right + controlSpacing, rowY),
+                Width = columnWidth / 2,
+                DecimalPlaces = 1,
+                Increment = 0.1m,
+                Minimum = 0.0m,
+                Maximum = 2.0m,
+                Value = 0.5m
+            };
+
+            presetsTab.Controls.AddRange(new Control[]
+            {
+        presetNameTextBoxes[index], presetVoiceModelComboBoxes[index],
+        presetSpeakerComboBoxes[index], presetSpeedComboBoxes[index],
+        presetSilenceNumericUpDowns[index]
+            });
+        }
+
+        private void UpdatePresetName(int index)
+        {
+            var preset = new PiperTrayApp.PresetSettings
+            {
+                Name = presetNameTextBoxes[index].Text,
+                VoiceModel = presetVoiceModelComboBoxes[index].SelectedItem?.ToString(),
+                Speaker = int.Parse(presetSpeakerComboBoxes[index].SelectedItem?.ToString() ?? "0"),
+                Speed = GetSpeedValue(presetSpeedComboBoxes[index].SelectedIndex),
+                SentenceSilence = (float)presetSilenceNumericUpDowns[index].Value
+            };
+
+            PiperTrayApp.GetInstance().SavePreset(index, preset);
+        }
+
+        private void UpdatePresetSpeakers(int index)
+        {
+            if (presetVoiceModelComboBoxes[index].SelectedItem != null)
+            {
+                string selectedModel = presetVoiceModelComboBoxes[index].SelectedItem.ToString();
+                string jsonPath = Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                    $"{selectedModel}.onnx.json"
+                );
+
+                if (File.Exists(jsonPath))
+                {
+                    string jsonContent = File.ReadAllText(jsonPath);
+                    using JsonDocument doc = JsonDocument.Parse(jsonContent);
+                    if (doc.RootElement.TryGetProperty("num_speakers", out JsonElement numSpeakers))
+                    {
+                        presetSpeakerComboBoxes[index].Items.Clear();
+                        for (int i = 0; i < numSpeakers.GetInt32(); i++)
+                        {
+                            presetSpeakerComboBoxes[index].Items.Add(i.ToString());
+                        }
+                        if (presetSpeakerComboBoxes[index].Items.Count > 0)
+                        {
+                            presetSpeakerComboBoxes[index].SelectedIndex = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void LoadSavedPresets()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                var preset = PiperTrayApp.GetInstance().LoadPreset(i);
+                if (preset != null)
+                {
+                    presetNameTextBoxes[i].Text = preset.Name;
+
+                    if (preset.VoiceModel != null && presetVoiceModelComboBoxes[i].Items.Contains(preset.VoiceModel))
+                    {
+                        presetVoiceModelComboBoxes[i].SelectedItem = preset.VoiceModel;
+                        UpdatePresetSpeakers(i);
+                        presetSpeakerComboBoxes[i].SelectedItem = preset.Speaker.ToString();
+                    }
+
+                    int speedIndex = 10 - (int)(preset.Speed * 10);
+                    presetSpeedComboBoxes[i].SelectedIndex = speedIndex;
+                    presetSilenceNumericUpDowns[i].Value = (decimal)preset.SentenceSilence;
+                }
+            }
         }
 
         private Image GetRefreshIcon()
@@ -476,6 +770,16 @@ namespace PiperTray
         private string GetConfigPath()
         {
             return Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "settings.conf");
+        }
+
+        private string ReadSettingValue(string key)
+        {
+            var settings = ReadCurrentSettings();
+            if (settings.TryGetValue(key, out string value))
+            {
+                return value;
+            }
+            return null;
         }
 
         private Dictionary<string, string> ReadCurrentSettings()
@@ -795,7 +1099,8 @@ namespace PiperTray
                         Log($"Set speed to: {speedValue}");
                     }
                 }
-
+                LoadSavedPresets();
+                LoadMenuVisibilitySettings();
                 LoadHotkeySettings(settings);
             }
             else
@@ -1275,6 +1580,21 @@ namespace PiperTray
                 // Get sentence silence value
                 float sentenceSilence = (float)sentenceSilenceNumeric.Value;
                 Log($"[SaveButton_Click] New sentence silence value: {sentenceSilence}");
+
+                // Save presets
+                for (int i = 0; i < 4; i++)
+                {
+                    var preset = new PiperTrayApp.PresetSettings
+                    {
+                        Name = presetNameTextBoxes[i].Text,
+                        VoiceModel = presetVoiceModelComboBoxes[i].SelectedItem?.ToString(),
+                        Speaker = int.Parse(presetSpeakerComboBoxes[i].SelectedItem?.ToString() ?? "0"),
+                        Speed = GetSpeedValue(presetSpeedComboBoxes[i].SelectedIndex),
+                        SentenceSilence = (float)presetSilenceNumericUpDowns[i].Value
+                    };
+
+                    PiperTrayApp.GetInstance().SavePreset(i, preset);
+                }
 
                 // Get all current hotkey values
                 uint monitoringModifiers = monitoringModifierComboBox?.SelectedItem != null ?
