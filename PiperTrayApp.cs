@@ -93,6 +93,7 @@ namespace PiperTray
             public int Speaker { get; set; }
             public double Speed { get; set; }
             public float SentenceSilence { get; set; }
+            public bool Enabled { get; set; }
         }
 
         public const int HOTKEY_ID_STOP_SPEECH = 9000;
@@ -136,6 +137,7 @@ namespace PiperTray
         private ToolStripMenuItem slowerMenuItem;
         private ToolStripMenuItem resetSpeedMenuItem;
         private ToolStripMenuItem voiceMenuItem;
+        private ToolStripMenuItem stopSpeechMenuItem;
         private ToolStripMenuItem settingsMenuItem;
         private ToolStripMenuItem exitMenuItem;
         private System.Windows.Forms.Timer clipboardTimer;
@@ -149,13 +151,17 @@ namespace PiperTray
         public static bool IsLoggingEnabled { get; private set; }
         private static readonly object logLock = new object();
         private bool isProcessing = false;
+        private bool isInitializing = false;
         private WaveOutEvent currentWaveOut;
         private bool isLoggingEnabled = false;
         private List<string> voiceModels;
         private int currentVoiceModelIndex = 0;
         private int currentSpeaker = 0;
-        private readonly double[] speedOptions = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 };
-        private int currentSpeedIndex = 0; // Default to 1.0x speed
+        private readonly double[] speedOptions = {
+            2.0, 1.9, 1.8, 1.7, 1.6, 1.5, 1.4, 1.3, 1.2, 1.1,  // -9 to 0
+            1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1   // 1 to 10
+        };
+        private int currentSpeedIndex = 10; // Default to 1.0x speed
         private double currentSpeed = 1.0;
 
         private int currentPresetIndex = -1;
@@ -177,11 +183,13 @@ namespace PiperTray
         private void InitializeMenuItems()
         {
             toggleMonitoringMenuItem = new ToolStripMenuItem("Monitoring");
+            stopSpeechMenuItem = new ToolStripMenuItem("Stop Speech", null, (s, e) => StopCurrentSpeech());
             voiceMenuItem = new ToolStripMenuItem("Voice");
             settingsMenuItem = new ToolStripMenuItem("Settings");
             exitMenuItem = new ToolStripMenuItem("Exit");
 
             menuItems["Monitoring"] = toggleMonitoringMenuItem;
+            menuItems["Stop Speech"] = stopSpeechMenuItem;
             menuItems["Speed"] = speedMenuItem;
             menuItems["Voice"] = voiceMenuItem;
             menuItems["Presets"] = presetsMenuItem;
@@ -306,22 +314,20 @@ namespace PiperTray
             {
                 syncContext = SynchronizationContext.Current ?? new SynchronizationContext();
 
-                // Set up logging first
                 SetLogFilePath();
                 InitializeLogging();
                 SetPiperPath();
                 Log("Starting application initialization");
 
-                // Initialize core components
                 InitializeComponent();
                 LoadAndCacheDictionaries();
                 InitializeClipboardMonitoring();
                 InitializeHotkeyActions();
 
-                // Load settings and models
                 LoadVoiceModels();
                 var settings = ReadSettings();
-                ApplyMonitoringState(settings.monitoringEnabled);
+
+                isInitializing = true;
                 ApplySettings(
                     settings.model,
                     settings.speed,
@@ -336,12 +342,11 @@ namespace PiperTray
                     settings.speedDecreaseHotkeyModifiers,
                     settings.speedDecreaseHotkeyVk,
                     settings.speaker,
-                    settings.sentenceSilence
-                );
+                    settings.sentenceSilence);
+                isInitializing = false;
 
                 RegisterHotkey(HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
 
-                // Keep the application running
                 Application.Run(this);
 
                 Log("Application initialization completed successfully");
@@ -406,7 +411,6 @@ namespace PiperTray
 
         private void TestWndProc()
         {
-            Log($"[TestWndProc] Sending test message to WndProc");
             SendMessage(this.Handle, 0x0400, IntPtr.Zero, IntPtr.Zero);
         }
 
@@ -538,8 +542,6 @@ namespace PiperTray
             {
                 settingsForm.UpdateSentenceSilence(sentenceSilence);
             }
-
-            Log($"[ApplySettings] Applied settings - Model: {model}, Speed: {speed}, Logging: {logging}, Speaker: {speaker}, Sentence Silence: {sentenceSilence}");
         }
 
 
@@ -928,37 +930,58 @@ namespace PiperTray
             Log($"[WndProc] Message 0x{m.Msg:X4} processed");
         }
 
-
         private void AddPresetsToContextMenu()
         {
             presetsMenuItem.DropDownItems.Clear();
+            bool hasEnabledPresets = false;
+
+            string lastUsedPresetStr = ReadSettingValue("LastUsedPreset");
+            int lastUsedPreset = -1;
+            if (int.TryParse(lastUsedPresetStr, out int savedIndex))
+            {
+                lastUsedPreset = savedIndex;
+            }
+
+            // If only one preset is enabled, it should be the active one
+            int enabledCount = 0;
+            int singleEnabledIndex = -1;
+
+            // First pass to count enabled presets
             for (int i = 0; i < 4; i++)
             {
                 var settings = LoadPreset(i);
-                string presetName = settings?.Name ?? $"Preset {i + 1}";
-                var presetItem = new CustomVoiceMenuItem
+                if (settings != null && settings.Enabled)
                 {
-                    Text = presetName,
-                    IsSelected = (i == currentPresetIndex),
-                    SelectionColor = Color.LightBlue
-                };
-                int presetIndex = i;
-                presetItem.Click += (s, e) =>
-                {
-                    ApplyPreset(presetIndex);
-                    currentPresetIndex = presetIndex;
-                    UpdatePresetMenuSelection(presetIndex);
-                };
-                presetsMenuItem.DropDownItems.Add(presetItem);
+                    enabledCount++;
+                    singleEnabledIndex = i;
+                }
             }
 
-            // Load and apply the last used preset index
-            var lastUsedPresetIndex = ReadSettingValue("LastUsedPreset");
-            if (!string.IsNullOrEmpty(lastUsedPresetIndex) && int.TryParse(lastUsedPresetIndex, out int savedIndex))
+            // Second pass to add menu items
+            for (int i = 0; i < 4; i++)
             {
-                currentPresetIndex = savedIndex;
-                UpdatePresetMenuSelection(savedIndex);
+                var settings = LoadPreset(i);
+                if (settings != null && settings.Enabled)
+                {
+                    hasEnabledPresets = true;
+                    var presetItem = new CustomVoiceMenuItem
+                    {
+                        Text = settings.Name,
+                        IsSelected = (enabledCount == 1) ? (i == singleEnabledIndex) : (i == lastUsedPreset),
+                        SelectionColor = Color.LightBlue
+                    };
+                    int presetIndex = i;
+                    presetItem.Click += (s, e) =>
+                    {
+                        ApplyPreset(presetIndex);
+                        currentPresetIndex = presetIndex;
+                        UpdatePresetMenuSelection(presetIndex);
+                    };
+                    presetsMenuItem.DropDownItems.Add(presetItem);
+                }
             }
+
+            presetsMenuItem.Visible = hasEnabledPresets;
         }
 
         private void SaveLastUsedPreset(int presetIndex)
@@ -1025,13 +1048,17 @@ namespace PiperTray
             return null;
         }
 
-        public void SavePreset(int index, PresetSettings settings)
+        public void SavePreset(int index, PresetSettings preset)
         {
+            if (isInitializing)
+            {
+                return;
+            }
+
             string configPath = GetConfigPath();
             var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
-            string presetKey = $"Preset{index + 1}";
-            string presetJson = JsonSerializer.Serialize(settings);
-            UpdateOrAddSetting(lines, presetKey, presetJson);
+            string presetJson = JsonSerializer.Serialize(preset);
+            UpdateOrAddSetting(lines, $"Preset{index + 1}", presetJson);
             File.WriteAllLines(configPath, lines);
         }
 
@@ -1041,7 +1068,6 @@ namespace PiperTray
             clipboardTimer.Interval = 1000;
             clipboardTimer.Tick += ClipboardTimer_Tick;
             ignoreCurrentClipboard = true;
-            Log($"Clipboard monitoring initialized with {clipboardTimer.Interval}ms interval");
         }
 
         private void SetPiperPath()
@@ -1067,7 +1093,6 @@ namespace PiperTray
             string assemblyLocation = Assembly.GetExecutingAssembly().Location;
             string assemblyDirectory = Path.GetDirectoryName(assemblyLocation);
             LogFilePath = Path.Combine(assemblyDirectory, "system.log");
-            Log($"Log file initialized at {LogFilePath}");
         }
 
         private void Log(string message)
@@ -1091,11 +1116,9 @@ namespace PiperTray
 
         private void LogAudioDevices()
         {
-            Log($"Available audio devices:");
             for (int i = 0; i < WaveOut.DeviceCount; i++)
             {
                 var capabilities = WaveOut.GetCapabilities(i);
-                Log($"Device {i}: {capabilities.ProductName}");
             }
         }
 
@@ -1119,7 +1142,6 @@ namespace PiperTray
             toggleMonitoringMenuItem.Checked = true;
             toggleMonitoringMenuItem.Text = "Monitoring";
             clipboardTimer.Start();
-            Log($"Clipboard monitoring started");
         }
 
         private void StopMonitoring()
@@ -1128,7 +1150,6 @@ namespace PiperTray
             toggleMonitoringMenuItem.Checked = false;
             toggleMonitoringMenuItem.Text = "Monitoring";
             clipboardTimer.Stop();
-            Log($"Clipboard monitoring stopped");
         }
 
         public void ToggleMonitoring(object sender, EventArgs e)
@@ -1255,43 +1276,29 @@ namespace PiperTray
 
         private void IncreaseSpeed()
         {
-            Log($"[IncreaseSpeed] Entering method. Current speed: {currentSpeed}");
-            if (currentSpeed > 0.1)
+            if (currentSpeedIndex < speedOptions.Length - 1)
             {
-                currentSpeed = Math.Max(0.1, currentSpeed - 0.1);
-                Log($"[IncreaseSpeed] New speed after increase: {currentSpeed}");
+                currentSpeedIndex++;
+                currentSpeed = speedOptions[currentSpeedIndex];
                 UpdateSpeedDisplay();
                 SaveSettings(currentSpeed);
-                Log($"[IncreaseSpeed] Settings saved with new speed: {currentSpeed}");
             }
-            else
-            {
-                Log($"[IncreaseSpeed] Speed not increased, already at maximum");
-            }
-            Log($"[IncreaseSpeed] Exiting method");
         }
 
         private void DecreaseSpeed()
         {
-            Log($"[DecreaseSpeed] Entering method. Current speed: {currentSpeed}");
-            if (currentSpeed < 1.0)
+            if (currentSpeedIndex > 0)
             {
-                currentSpeed = Math.Min(1.0, currentSpeed + 0.1);
-                Log($"[DecreaseSpeed] New speed after decrease: {currentSpeed}");
+                currentSpeedIndex--;
+                currentSpeed = speedOptions[currentSpeedIndex];
                 UpdateSpeedDisplay();
                 SaveSettings(currentSpeed);
-                Log($"[DecreaseSpeed] Settings saved with new speed: {currentSpeed}");
             }
-            else
-            {
-                Log($"[DecreaseSpeed] Speed not decreased, already at minimum");
-            }
-            Log($"[DecreaseSpeed] Exiting method");
         }
 
         private void ResetSpeed(object sender, EventArgs e)
         {
-            currentSpeedIndex = speedOptions.Length - 1; // Reset to default speed (1.0)
+            currentSpeedIndex = speedOptions.Length - 10; // Reset to default speed (1.0)
             currentSpeed = speedOptions[currentSpeedIndex];
             UpdateSpeedDisplay();
             SaveSettings(currentSpeed);
@@ -1301,12 +1308,9 @@ namespace PiperTray
         {
             syncContext.Post(_ =>
             {
-                Log($"[UpdateSpeedFromSettings] Entering method. New speed: {newSpeed}");
-                Log($"[UpdateSpeedFromSettings] Current Instance Hash: {Instance?.GetHashCode() ?? 0}");
 
                 currentSpeed = newSpeed;
                 currentSpeedIndex = Array.IndexOf(speedOptions, newSpeed);
-                Log($"[UpdateSpeedFromSettings] Updated currentSpeed: {currentSpeed}, currentSpeedIndex: {currentSpeedIndex}");
 
                 if (currentSpeedIndex == -1)
                 {
@@ -1319,31 +1323,24 @@ namespace PiperTray
                             break;
                         }
                     }
-                    Log($"[UpdateSpeedFromSettings] Adjusted currentSpeedIndex: {currentSpeedIndex}");
                 }
 
                 UpdateSpeedDisplay();
-                Log($"[UpdateSpeedFromSettings] Speed display updated");
 
-                Log($"[UpdateSpeedFromSettings] Exiting method");
             }, null);
         }
 
 
         private void UpdateSpeedDisplay()
         {
-            Log($"[UpdateSpeedDisplay] Entering method. Current speed: {currentSpeed}");
-            int displaySpeed = 11 - (int)Math.Round(currentSpeed * 10);
-            Log($"[UpdateSpeedDisplay] Calculated display speed: {displaySpeed}");
+            int displaySpeed = currentSpeedIndex - 10; // Convert index to display value (-9 to 10)
 
             speedMenuItem.Text = $"Speed: {displaySpeed}";
-            Log($"[UpdateSpeedDisplay] Updated speedMenuItem text: {speedMenuItem.Text}");
 
-            fasterMenuItem.Enabled = !IsApproximatelyEqual(currentSpeed, 0.1);
-            slowerMenuItem.Enabled = !IsApproximatelyEqual(currentSpeed, 1.0);
-            resetSpeedMenuItem.Enabled = !IsApproximatelyEqual(currentSpeed, 1.0);
-            Log($"[UpdateSpeedDisplay] Menu item states - Faster: {fasterMenuItem.Enabled}, Slower: {slowerMenuItem.Enabled}, Reset: {resetSpeedMenuItem.Enabled}");
-            Log($"[UpdateSpeedDisplay] Exiting method");
+            fasterMenuItem.Enabled = currentSpeedIndex < speedOptions.Length - 1;
+            slowerMenuItem.Enabled = currentSpeedIndex > 0;
+            resetSpeedMenuItem.Enabled = currentSpeedIndex != 10;
+
         }
 
         private bool IsApproximatelyEqual(double a, double b, double epsilon = 1e-6)
@@ -1423,7 +1420,6 @@ namespace PiperTray
 
         public List<string> GetVoiceModels()
         {
-            Log($"[GetVoiceModels] Returning {voiceModelState.Models.Count} voice models");
             return voiceModelState.Models;
         }
 
@@ -1627,7 +1623,6 @@ namespace PiperTray
                 {
                     bool oldChecked = item.Checked;
                     item.Checked = (i == voiceModelState.CurrentIndex);
-                    Log($"[{DateTime.Now:HH:mm:ss.fff}] [UpdateVoiceMenu] Item {i}: '{item.Text}', Old Checked: {oldChecked}, New Checked: {item.Checked}");
                 }
             }
         }
@@ -1674,7 +1669,10 @@ namespace PiperTray
                 ToggleMonitoring(s, e);
             };
 
+            stopSpeechMenuItem = new ToolStripMenuItem("Stop Speech", null, (s, e) => StopCurrentSpeech());
+
             trayIcon.ContextMenuStrip.Items.Add(toggleMonitoringMenuItem);
+            trayIcon.ContextMenuStrip.Items.Add(stopSpeechMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(speedMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(voiceMenuItem);
             PopulateVoiceMenu();
@@ -1694,6 +1692,9 @@ namespace PiperTray
             var settingsMenuItem = new ToolStripMenuItem("Settings", null, SafeEventHandler(OpenSettings));
             trayIcon.ContextMenuStrip.Items.Add(settingsMenuItem);
             trayIcon.ContextMenuStrip.Items.Add(exitMenuItem);
+
+            bool stopSpeechVisible = menuVisibilitySettings.TryGetValue("Stop Speech", out bool visible) && visible;
+            stopSpeechMenuItem.Visible = stopSpeechVisible;
         }
 
         private async void ExportWav(object sender, EventArgs e)
@@ -1784,9 +1785,7 @@ namespace PiperTray
 
         private void SettingsForm_SpeedChanged(object sender, double newSpeed)
         {
-            Log($"[SettingsForm_SpeedChanged] Entering method. New speed: {newSpeed}");
             UpdateSpeedFromSettings(newSpeed);
-            Log($"[SettingsForm_SpeedChanged] Exiting method");
         }
 
         private void SettingsForm_FormClosed(object sender, FormClosedEventArgs e)
@@ -1956,7 +1955,6 @@ namespace PiperTray
 
         private void ApplyMonitoringState(bool enabled)
         {
-            Log($"[ApplyMonitoringState] Setting monitoring state to: {enabled}");
             if (enabled)
             {
                 StartMonitoring();
@@ -2101,7 +2099,6 @@ namespace PiperTray
 
         private string ProcessLine(string line)
         {
-            Log($"Step 1 - Raw input: {line}");
 
             // Currency abbreviations
             line = Regex.Replace(line, @"GBP\s*(\d+)", "$1 pounds");
@@ -2139,7 +2136,6 @@ namespace PiperTray
             line = Regex.Replace(line, @"(\d+)\s*yuan", "$1 yuan");
 
             line = line.Replace("#", "").Replace("*", "");
-            Log($"Step 2 - After character cleanup: {line}");
 
             line = Regex.Replace(line, @"(\w+)([.!?])(\s*)$", "$1, . . . . . . . $2$3");
 
@@ -2164,7 +2160,6 @@ namespace PiperTray
             }
 
             var result = string.Join(" ", processedWords);
-            Log($"Final processed output: {result}");
 
             return result;
         }
@@ -2307,6 +2302,12 @@ namespace PiperTray
 
         public void SaveSettings(double? speed = null, string voiceModel = null, int? speaker = null, float? sentenceSilence = null)
         {
+            if (isInitializing)
+            {
+                Log($"[SaveSettings] Skipping save during initialization");
+                return;
+            }
+
             Log($"[SaveSettings] Entering method. Saving current settings to file.");
             string configPath = GetConfigPath();
             var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
@@ -2315,7 +2316,9 @@ namespace PiperTray
 
             if (speed.HasValue)
             {
+                Log($"[SaveSettings] Saving speed value: {speed.Value}");
                 UpdateOrAddSetting(lines, "Speed", speed.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                Log($"[SaveSettings] Speed value written to settings: {speed.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
             }
             if (!string.IsNullOrEmpty(voiceModel))
             {
@@ -2387,7 +2390,7 @@ namespace PiperTray
             }
         }
 
-        private Dictionary<string, string> ReadCurrentSettings()
+        public Dictionary<string, string> ReadCurrentSettings()
         {
             var settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             string configPath = GetConfigPath();
@@ -2395,8 +2398,14 @@ namespace PiperTray
             {
                 try
                 {
-                    foreach (var line in File.ReadAllLines(configPath))
+                    var lines = File.ReadAllLines(configPath);
+                    foreach (string line in lines)
                     {
+                        if (string.IsNullOrWhiteSpace(line))
+                        {
+                            continue;
+                        }
+
                         var parts = line.Split(new[] { '=' }, 2);
                         if (parts.Length == 2)
                         {
@@ -2406,25 +2415,13 @@ namespace PiperTray
                             {
                                 settings.Add(key, value);
                             }
-                            else
-                            {
-                                Log($"[ReadCurrentSettings] Duplicate key '{key}' found in settings.conf. Ignoring duplicate.");
-                            }
-                        }
-                        else
-                        {
-                            Log($"[ReadCurrentSettings] Invalid line format: '{line}'. Skipping.");
                         }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    Log($"[ReadCurrentSettings] Exception while reading settings: {ex.Message}");
+                    // Silent exception handling
                 }
-            }
-            else
-            {
-                Log("[ReadCurrentSettings] settings.conf not found. Returning empty settings.");
             }
             return settings;
         }
