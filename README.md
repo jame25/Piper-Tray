@@ -13,6 +13,7 @@ If you would prefer a GUI, check out my other project: [Piper Read](https://gith
 * Many voices to choose from
 * Change Piper TTS voice model
 * Control Piper TTS speech rate
+* Presets support
 * Hotkeys support
 * Prevent keywords being read (ignore.dict)
 * Replace keywords with alternatives (replace.dict)
