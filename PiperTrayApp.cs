@@ -14,8 +14,10 @@ using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.ComponentModel;
+using System.Globalization;
 
 namespace PiperTray
 {
@@ -90,10 +92,22 @@ namespace PiperTray
         {
             public string Name { get; set; }
             public string VoiceModel { get; set; }
-            public int Speaker { get; set; }
-            public double Speed { get; set; }
-            public float SentenceSilence { get; set; }
-            public bool Enabled { get; set; }
+            public string Speaker { get; set; }
+            public string Speed { get; set; }
+            public string SentenceSilence { get; set; }
+            public string Enabled { get; set; }
+
+            [JsonIgnore]
+            public int SpeakerInt => int.TryParse(Speaker, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : 0;
+
+            [JsonIgnore]
+            public double SpeedDouble => double.TryParse(Speed, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : 1.0;
+
+            [JsonIgnore]
+            public float SentenceSilenceFloat => float.TryParse(SentenceSilence, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : 0.5f;
+
+            [JsonIgnore]
+            public bool EnabledBool => bool.TryParse(Enabled, out var result) ? result : false;
         }
 
         public const int HOTKEY_ID_STOP_SPEECH = 9000;
@@ -101,7 +115,10 @@ namespace PiperTray
         public const int HOTKEY_ID_CHANGE_VOICE = 9002;
         public const int HOTKEY_ID_SPEED_INCREASE = 9003;
         public const int HOTKEY_ID_SPEED_DECREASE = 9004;
+        public const int HOTKEY_ID_SWITCH_PRESET = 9005;
 
+        private uint switchPresetModifiers;
+        private uint switchPresetVk;
         private uint monitoringModifiers;
         private uint monitoringVk;
         private uint stopSpeechModifiers;
@@ -175,6 +192,13 @@ namespace PiperTray
 
         private volatile bool stopRequested = false;
 
+        public event EventHandler<int> ActivePresetChanged;
+
+        protected virtual void OnActivePresetChanged(int newPresetIndex)
+        {
+            ActivePresetChanged?.Invoke(this, newPresetIndex);
+        }
+
         private PiperTrayApp()
         {
 
@@ -198,6 +222,18 @@ namespace PiperTray
             // Load initial visibility settings
             LoadMenuVisibilitySettings();
             ApplyMenuVisibility();
+        }
+
+        public uint SwitchPresetModifiers
+        {
+            get { return switchPresetModifiers; }
+            set { switchPresetModifiers = value; }
+        }
+
+        public uint SwitchPresetVk
+        {
+            get { return switchPresetVk; }
+            set { switchPresetVk = value; }
         }
 
         private void LoadMenuVisibilitySettings()
@@ -320,6 +356,11 @@ namespace PiperTray
                 Log("Starting application initialization");
 
                 InitializeComponent();
+
+                // Create window handle explicitly before any hotkey registration
+                CreateHandle();
+                Log($"Window handle created: {Handle}");
+
                 LoadAndCacheDictionaries();
                 InitializeClipboardMonitoring();
                 InitializeHotkeyActions();
@@ -341,11 +382,11 @@ namespace PiperTray
                     settings.speedIncreaseHotkeyVk,
                     settings.speedDecreaseHotkeyModifiers,
                     settings.speedDecreaseHotkeyVk,
+                    settings.switchPresetModifiers,
+                    settings.switchPresetVk,
                     settings.speaker,
                     settings.sentenceSilence);
                 isInitializing = false;
-
-                RegisterHotkey(HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
 
                 Application.Run(this);
 
@@ -513,29 +554,75 @@ namespace PiperTray
             Log($"Dictionaries loaded and cached. Ignore words: {ignoreWords.Count}, Banned words: {bannedWords.Count}, Replace words: {replaceWords.Count}");
         }
 
-        private void ApplySettings(string model, float speed, bool logging,
-            uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
-            uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
+        private void ApplySettings(
+            string model,
+            float speed,
+            bool logging,
+            uint monitoringHotkeyModifiers,
+            uint monitoringHotkeyVk,
+            uint changeVoiceHotkeyModifiers,
+            uint changeVoiceHotkeyVk,
             bool monitoringEnabled,
-            uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
-            uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk,
+            uint speedIncreaseHotkeyModifiers,
+            uint speedIncreaseHotkeyVk,
+            uint speedDecreaseHotkeyModifiers,
+            uint speedDecreaseHotkeyVk,
+            uint switchPresetModifiers,
+            uint switchPresetVk,
             int speaker,
             float sentenceSilence)
         {
-            UpdateVoiceModel(model);
-            UpdateSpeedFromSettings(speed);
-            isLoggingEnabled = logging;
-            currentSpeaker = speaker;
-            ApplyHotkeySettings(
-                monitoringHotkeyModifiers,
-                monitoringHotkeyVk,
-                changeVoiceHotkeyModifiers,
-                changeVoiceHotkeyVk,
-                speedIncreaseHotkeyModifiers,
-                speedIncreaseHotkeyVk,
-                speedDecreaseHotkeyModifiers,
-                speedDecreaseHotkeyVk
-            );
+            // Update instance variables with current hotkey settings
+            this.monitoringModifiers = monitoringHotkeyModifiers;
+            this.monitoringVk = monitoringHotkeyVk;
+            this.changeVoiceModifiers = changeVoiceHotkeyModifiers;
+            this.changeVoiceVk = changeVoiceHotkeyVk;
+            this.speedIncreaseModifiers = speedIncreaseHotkeyModifiers;
+            this.speedIncreaseVk = speedIncreaseHotkeyVk;
+            this.speedDecreaseModifiers = speedDecreaseHotkeyModifiers;
+            this.speedDecreaseVk = speedDecreaseHotkeyVk;
+            this.switchPresetModifiers = switchPresetModifiers;
+            this.switchPresetVk = switchPresetVk;
+            this.stopSpeechModifiers = stopSpeechModifiers;
+            this.stopSpeechVk = stopSpeechVk;
+
+            // Unregister existing hotkeys first
+            UnregisterAllHotkeys();
+
+            // Read hotkey enabled states
+            var settings = ReadCurrentSettings();
+
+            // Only register hotkeys if they are enabled
+            if (settings.TryGetValue("MonitoringHotkeyEnabled", out string monEnabled) && bool.Parse(monEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_MONITORING, monitoringModifiers, monitoringVk, "Monitoring");
+            }
+
+            if (settings.TryGetValue("StopSpeechHotkeyEnabled", out string stopEnabled) && bool.Parse(stopEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
+            }
+
+            if (settings.TryGetValue("ChangeVoiceHotkeyEnabled", out string voiceEnabled) && bool.Parse(voiceEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_CHANGE_VOICE, changeVoiceModifiers, changeVoiceVk, "Change Voice");
+            }
+
+            if (settings.TryGetValue("SpeedIncreaseHotkeyEnabled", out string speedIncEnabled) && bool.Parse(speedIncEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_SPEED_INCREASE, speedIncreaseModifiers, speedIncreaseVk, "Speed Increase");
+            }
+
+            if (settings.TryGetValue("SpeedDecreaseHotkeyEnabled", out string speedDecEnabled) && bool.Parse(speedDecEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_SPEED_DECREASE, speedDecreaseModifiers, speedDecreaseVk, "Speed Decrease");
+            }
+
+            if (settings.TryGetValue("SwitchPresetHotkeyEnabled", out string switchEnabled) && bool.Parse(switchEnabled))
+            {
+                RegisterHotkey(HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk, "Switch Preset");
+            }
+
             ApplyMonitoringState(monitoringEnabled);
 
             if (settingsForm != null)
@@ -564,6 +651,7 @@ namespace PiperTray
         {
             switch (hotkeyId)
             {
+                case HOTKEY_ID_SWITCH_PRESET: return "Switch Preset hotkey";
                 case HOTKEY_ID_MONITORING: return "Monitoring hotkey";
                 case HOTKEY_ID_CHANGE_VOICE: return "Change Voice hotkey";
                 case HOTKEY_ID_SPEED_INCREASE: return "Speed Increase hotkey";
@@ -575,25 +663,25 @@ namespace PiperTray
         private void ApplyHotkeySettings(uint monitoringHotkeyModifiers, uint monitoringHotkeyVk,
             uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk,
             uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk,
-            uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk)
+            uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk,
+            uint switchPresetModifiers, uint switchPresetVk)
         {
             Log($"[ApplyHotkeySettings] Entering method");
 
-            Log($"[ApplyHotkeySettings] Monitoring hotkey - Modifiers: 0x{monitoringHotkeyModifiers:X}, VK: 0x{monitoringHotkeyVk:X}");
-            var result = UpdateHotkey(HOTKEY_ID_MONITORING, monitoringHotkeyModifiers, monitoringHotkeyVk);
-            Log($"[ApplyHotkeySettings] Monitoring hotkey registration result - Modifiers: 0x{result.modifiers:X}, VK: 0x{result.vk:X}");
+            var switchPresetResult = UpdateHotkey(HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk);
+            Log($"[ApplyHotkeySettings] Switch Preset hotkey registration result - Modifiers: 0x{switchPresetResult.modifiers:X}, VK: 0x{switchPresetResult.vk:X}");
 
-            Log($"[ApplyHotkeySettings] Change Voice hotkey - Modifiers: 0x{changeVoiceHotkeyModifiers:X}, VK: 0x{changeVoiceHotkeyVk:X}");
-            result = UpdateHotkey(HOTKEY_ID_CHANGE_VOICE, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk);
-            Log($"[ApplyHotkeySettings] Change Voice hotkey registration result - Modifiers: 0x{result.modifiers:X}, VK: 0x{result.vk:X}");
+            var monitoringResult = UpdateHotkey(HOTKEY_ID_MONITORING, monitoringHotkeyModifiers, monitoringHotkeyVk);
+            Log($"[ApplyHotkeySettings] Monitoring hotkey registration result - Modifiers: 0x{monitoringResult.modifiers:X}, VK: 0x{monitoringResult.vk:X}");
 
-            Log($"[ApplyHotkeySettings] Speed Increase hotkey - Modifiers: 0x{speedIncreaseHotkeyModifiers:X}, VK: 0x{speedIncreaseHotkeyVk:X}");
-            result = UpdateHotkey(HOTKEY_ID_SPEED_INCREASE, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk);
-            Log($"[ApplyHotkeySettings] Speed Increase hotkey registration result - Modifiers: 0x{result.modifiers:X}, VK: 0x{result.vk:X}");
+            var changeVoiceResult = UpdateHotkey(HOTKEY_ID_CHANGE_VOICE, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk);
+            Log($"[ApplyHotkeySettings] Change Voice hotkey registration result - Modifiers: 0x{changeVoiceResult.modifiers:X}, VK: 0x{changeVoiceResult.vk:X}");
 
-            Log($"[ApplyHotkeySettings] Speed Decrease hotkey - Modifiers: 0x{speedDecreaseHotkeyModifiers:X}, VK: 0x{speedDecreaseHotkeyVk:X}");
-            result = UpdateHotkey(HOTKEY_ID_SPEED_DECREASE, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk);
-            Log($"[ApplyHotkeySettings] Speed Decrease hotkey registration result - Modifiers: 0x{result.modifiers:X}, VK: 0x{result.vk:X}");
+            var speedIncreaseResult = UpdateHotkey(HOTKEY_ID_SPEED_INCREASE, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk);
+            Log($"[ApplyHotkeySettings] Speed Increase hotkey registration result - Modifiers: 0x{speedIncreaseResult.modifiers:X}, VK: 0x{speedIncreaseResult.vk:X}");
+
+            var speedDecreaseResult = UpdateHotkey(HOTKEY_ID_SPEED_DECREASE, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk);
+            Log($"[ApplyHotkeySettings] Speed Decrease hotkey registration result - Modifiers: 0x{speedDecreaseResult.modifiers:X}, VK: 0x{speedDecreaseResult.vk:X}");
 
             Log($"[ApplyHotkeySettings] Hotkey settings applied");
             Log($"[ApplyHotkeySettings] Exiting method");
@@ -622,6 +710,7 @@ namespace PiperTray
         {
             hotkeyActions = new Dictionary<int, Action>
             {
+                { HOTKEY_ID_SWITCH_PRESET, SwitchPreset },
                 { HOTKEY_ID_STOP_SPEECH, StopCurrentSpeech },
                 { HOTKEY_ID_MONITORING, () => ToggleMonitoring(this, EventArgs.Empty) },
                 { HOTKEY_ID_CHANGE_VOICE, ChangeVoice },
@@ -630,6 +719,26 @@ namespace PiperTray
             };
 
             Log($"[InitializeHotkeyActions] Hotkey actions initialized. Count: {hotkeyActions.Count}");
+        }
+
+        public void SwitchPreset()
+        {
+            var enabledPresets = new List<int>();
+            for (int i = 0; i < 4; i++)
+            {
+                var preset = LoadPreset(i);
+                if (preset != null && bool.Parse(preset.Enabled))
+                {
+                    enabledPresets.Add(i);
+                }
+            }
+
+            if (enabledPresets.Count > 0)
+            {
+                int currentIndex = enabledPresets.IndexOf(currentPresetIndex);
+                int nextIndex = (currentIndex + 1) % enabledPresets.Count;
+                ApplyPreset(enabledPresets[nextIndex]);
+            }
         }
 
         private void StopCurrentSpeech()
@@ -706,7 +815,7 @@ namespace PiperTray
             base.SetVisibleCore(false);
         }
 
-        private void RegisterHotkeys()
+        public void RegisterHotkeys()
         {
             Log($"[RegisterHotkeys] Starting hotkey registration process");
             UnregisterAllHotkeys();
@@ -717,6 +826,7 @@ namespace PiperTray
             RegisterHotkey(HOTKEY_ID_CHANGE_VOICE, changeVoiceModifiers, changeVoiceVk, "Change Voice");
             RegisterHotkey(HOTKEY_ID_SPEED_INCREASE, speedIncreaseModifiers, speedIncreaseVk, "Speed Increase");
             RegisterHotkey(HOTKEY_ID_SPEED_DECREASE, speedDecreaseModifiers, speedDecreaseVk, "Speed Decrease");
+            RegisterHotkey(HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk, "Switch Preset");
 
             Log($"[RegisterHotkeys] Hotkey registration completed");
         }
@@ -727,6 +837,7 @@ namespace PiperTray
             UnregisterHotKey(this.Handle, HOTKEY_ID_CHANGE_VOICE);
             UnregisterHotKey(this.Handle, HOTKEY_ID_SPEED_INCREASE);
             UnregisterHotKey(this.Handle, HOTKEY_ID_SPEED_DECREASE);
+            UnregisterHotKey(this.Handle, HOTKEY_ID_SWITCH_PRESET);
             Log("All hotkeys unregistered");
         }
 
@@ -738,6 +849,7 @@ namespace PiperTray
                 case "ChangeVoice": return HOTKEY_ID_CHANGE_VOICE;
                 case "SpeedIncrease": return HOTKEY_ID_SPEED_INCREASE;
                 case "SpeedDecrease": return HOTKEY_ID_SPEED_DECREASE;
+                case "SwitchPreset": return HOTKEY_ID_SWITCH_PRESET;
                 default: throw new ArgumentException($"Unknown hotkey name: {hotkeyName}");
             }
         }
@@ -785,6 +897,10 @@ namespace PiperTray
                 // Update the appropriate variables based on the hotkey ID
                 switch (hotkeyId)
                 {
+                    case HOTKEY_ID_SWITCH_PRESET:
+                        switchPresetModifiers = modifiers;
+                        switchPresetVk = vk;
+                        break;
                     case HOTKEY_ID_MONITORING:
                         monitoringModifiers = modifiers;
                         monitoringVk = vk;
@@ -867,16 +983,17 @@ namespace PiperTray
 
         public bool IsMonitoringHotkeyRegistered()
         {
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVk, speaker, sentenceSilence) = ReadSettings();
             return IsHotkeyRegistered(monitoringHotkeyModifiers, monitoringHotkeyVk);
         }
 
         public void LoadAndApplyHotkeySettings()
         {
-            var (_, _, _, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, _, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+            var (_, _, _, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, _, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVk, speaker, sentenceSilence) = ReadSettings();
 
             UnregisterAllHotkeys();
 
+            RegisterHotkey(HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk, "Switch Preset");
             RegisterHotkey(HOTKEY_ID_MONITORING, monitoringHotkeyModifiers, monitoringHotkeyVk, "Monitoring");
             RegisterHotkey(HOTKEY_ID_CHANGE_VOICE, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, "Change Voice");
             RegisterHotkey(HOTKEY_ID_SPEED_INCREASE, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, "Speed Increase");
@@ -950,7 +1067,7 @@ namespace PiperTray
             for (int i = 0; i < 4; i++)
             {
                 var settings = LoadPreset(i);
-                if (settings != null && settings.Enabled)
+                if (settings != null && bool.Parse(settings.Enabled))
                 {
                     enabledCount++;
                     singleEnabledIndex = i;
@@ -961,7 +1078,7 @@ namespace PiperTray
             for (int i = 0; i < 4; i++)
             {
                 var settings = LoadPreset(i);
-                if (settings != null && settings.Enabled)
+                if (settings != null && bool.Parse(settings.Enabled))
                 {
                     hasEnabledPresets = true;
                     var presetItem = new CustomVoiceMenuItem
@@ -1021,29 +1138,48 @@ namespace PiperTray
             if (settings != null)
             {
                 UpdateVoiceModel(settings.VoiceModel);
-                UpdateCurrentSpeaker(settings.Speaker);
-                UpdateSpeedFromSettings(settings.Speed);
+                UpdateCurrentSpeaker(int.Parse(settings.Speaker));
+                UpdateSpeedFromSettings(double.Parse(settings.Speed, CultureInfo.InvariantCulture));
                 SaveSettings(
-                    speed: settings.Speed,
+                    speed: double.Parse(settings.Speed, CultureInfo.InvariantCulture),
                     voiceModel: settings.VoiceModel,
-                    speaker: settings.Speaker,
-                    sentenceSilence: settings.SentenceSilence
+                    speaker: int.Parse(settings.Speaker),
+                    sentenceSilence: float.Parse(settings.SentenceSilence, CultureInfo.InvariantCulture)
                 );
                 currentPresetIndex = presetIndex;
                 SaveLastUsedPreset(presetIndex);
                 UpdatePresetMenuSelection(presetIndex);
+
+                // Raise the event
+                OnActivePresetChanged(currentPresetIndex);
             }
+        }
+
+        public int GetCurrentPresetIndex()
+        {
+            return currentPresetIndex;
         }
 
         public PresetSettings LoadPreset(int index)
         {
-            string configPath = GetConfigPath();
             var settings = ReadCurrentSettings();
-            string presetKey = $"Preset{index + 1}";
-
-            if (settings.TryGetValue(presetKey, out string presetJson))
+            if (settings.TryGetValue($"Preset{index + 1}", out string presetJson))
             {
-                return JsonSerializer.Deserialize<PresetSettings>(presetJson);
+                try
+                {
+                    var options = new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        NumberHandling = JsonNumberHandling.AllowReadingFromString
+                    };
+
+                    var preset = JsonSerializer.Deserialize<PresetSettings>(presetJson, options);
+                    return preset;
+                }
+                catch (Exception ex)
+                {
+                    Log($"[LoadPreset] Error deserializing preset {index + 1}: {ex.Message}");
+                }
             }
             return null;
         }
@@ -1057,7 +1193,16 @@ namespace PiperTray
 
             string configPath = GetConfigPath();
             var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
-            string presetJson = JsonSerializer.Serialize(preset);
+
+            // Include JsonSerializerOptions here
+            var options = new JsonSerializerOptions
+            {
+                IgnoreNullValues = false,
+                PropertyNameCaseInsensitive = true,
+                NumberHandling = JsonNumberHandling.AllowReadingFromString
+            };
+
+            string presetJson = JsonSerializer.Serialize(preset, options);
             UpdateOrAddSetting(lines, $"Preset{index + 1}", presetJson);
             File.WriteAllLines(configPath, lines);
         }
@@ -1583,7 +1728,7 @@ namespace PiperTray
 
                 if (voiceModelState?.Models?.Any() == true)
                 {
-                    var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+                    var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVk, speaker, sentenceSilence) = ReadSettings();
                     Log($"[RefreshVoiceModelList] Current model from settings: {model}");
 
                     if (!string.IsNullOrEmpty(model))
@@ -1716,7 +1861,7 @@ namespace PiperTray
                     using (var memoryStream = new MemoryStream())
                     {
                         var processedText = ProcessLine(clipboardText);
-                        var (model, speed, _, _, _, _, _, _, _, _, _, _, speaker, sentenceSilence) = ReadSettings();
+                        var (model, speed, _, _, _, _, _, _, _, _, _, _, _, _, speaker, sentenceSilence) = ReadSettings();
 
                         ProcessStartInfo psi = new ProcessStartInfo
                         {
@@ -1760,6 +1905,13 @@ namespace PiperTray
             try
             {
                 Log($"Opening Settings form");
+                var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk,
+                    changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled,
+                    speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk,
+                    speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk,
+                    switchPresetModifiers, switchPresetVk,
+                    speaker, sentenceSilence) = ReadSettings();
+
                 var settingsForm = SettingsForm.GetInstance();
                 settingsForm.ShowSettingsForm();
                 Log($"Settings form displayed successfully");
@@ -1773,7 +1925,7 @@ namespace PiperTray
 
         private void SettingsForm_VoiceModelChanged(object sender, EventArgs e)
         {
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVk, speaker, sentenceSilence) = ReadSettings();
 
             UpdateVoiceModelAndRefresh(model);
 
@@ -1849,7 +2001,7 @@ namespace PiperTray
             }
         }
 
-        private (string model, float speed, bool logging, uint monitoringHotkeyModifiers, uint monitoringHotkeyVk, uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk, bool monitoringEnabled, uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk, uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk, int speaker, float sentenceSilence) ReadSettings()
+        private (string model, float speed, bool logging, uint monitoringHotkeyModifiers, uint monitoringHotkeyVk, uint changeVoiceHotkeyModifiers, uint changeVoiceHotkeyVk, bool monitoringEnabled, uint speedIncreaseHotkeyModifiers, uint speedIncreaseHotkeyVk, uint speedDecreaseHotkeyModifiers, uint speedDecreaseHotkeyVk, uint switchPresetModifiers, uint switchPresetVk, int speaker, float sentenceSilence) ReadSettings()
         {
             string settingsPath = GetConfigPath();
             string model = "";
@@ -1863,6 +2015,8 @@ namespace PiperTray
             uint speedIncreaseHotkeyVk = 0;
             uint speedDecreaseHotkeyModifiers = 0;
             uint speedDecreaseHotkeyVk = 0;
+            uint switchPresetModifiers = 0;
+            uint switchPresetVk = 0;
             bool monitoringEnabled = true;
             int speaker = 0;
             float sentenceSilence = 0.2f;
@@ -1929,6 +2083,12 @@ namespace PiperTray
                             case "MonitoringEnabled":
                                 bool.TryParse(parts[1].Trim(), out monitoringEnabled);
                                 break;
+                            case "SwitchPresetModifier":
+                                uint.TryParse(parts[1].Trim().Replace("0x", ""), System.Globalization.NumberStyles.HexNumber, null, out switchPresetModifiers);
+                                break;
+                            case "SwitchPresetKey":
+                                uint.TryParse(parts[1].Trim().Replace("0x", ""), System.Globalization.NumberStyles.HexNumber, null, out switchPresetVk);
+                                break;
                             case "Speaker":
                                 int.TryParse(parts[1].Trim(), out speaker);
                                 break;
@@ -1950,7 +2110,7 @@ namespace PiperTray
             }
 
             Log($"Voice model read from settings: {model}");
-            return (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence);
+            return (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVk, speaker, sentenceSilence);
         }
 
         private void ApplyMonitoringState(bool enabled)
@@ -2017,7 +2177,7 @@ namespace PiperTray
 
             var processedText = processedTextBuilder.ToString();
             Log($"Final text sent to Piper: {processedText}");
-            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+            var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk, changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled, speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk, speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, switchPresetModifiers, switchPresetVK, speaker, sentenceSilence) = ReadSettings();
 
             Log($"Initializing Piper process with model: {model}");
             ProcessStartInfo psi = new ProcessStartInfo
@@ -2031,7 +2191,7 @@ namespace PiperTray
                 CreateNoWindow = true,
                 WorkingDirectory = Path.GetDirectoryName(piperPath),
                 StandardInputEncoding = Encoding.UTF8,
-                StandardOutputEncoding = Encoding.UTF8
+                StandardOutputEncoding = Encoding.Default,
             };
 
             try
@@ -2198,45 +2358,52 @@ namespace PiperTray
                 return;
             }
 
-            using (var memoryStream = new MemoryStream())
+            try
             {
-                try
+                var waveFormat = new WaveFormat(22050, 16, 1);
+                var bufferedWaveProvider = new BufferedWaveProvider(waveFormat)
                 {
-                    await piperProcess.StandardOutput.BaseStream.CopyToAsync(memoryStream);
-                    memoryStream.Position = 0;
+                    BufferDuration = TimeSpan.FromMinutes(5), // Increase duration as needed
+                    DiscardOnBufferOverflow = false // Do not discard data on overflow
+                };
 
-                    if (CurrentAudioState == AudioPlaybackState.StopRequested)
+                using (currentWaveOut = new WaveOutEvent())
+                {
+                    currentWaveOut.Init(bufferedWaveProvider);
+                    currentWaveOut.Play();
+                    Log($"[StreamAudioPlayback] Playback started");
+
+                    var buffer = new byte[8192];
+                    int bytesRead;
+
+                    while ((bytesRead = await piperProcess.StandardOutput.BaseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                     {
-                        Log($"[StreamAudioPlayback] Stop requested before playback started");
-                        return;
-                    }
-
-                    using (var waveStream = new RawSourceWaveStream(memoryStream, new WaveFormat(22050, 16, 1)))
-                    using (currentWaveOut = new WaveOutEvent())
-                    {
-                        currentWaveOut.Init(waveStream);
-                        CurrentAudioState = AudioPlaybackState.Playing;
-                        currentWaveOut.Play();
-
-                        while (currentWaveOut.PlaybackState == PlaybackState.Playing)
+                        if (playbackCancellationTokenSource?.Token.IsCancellationRequested == true)
                         {
-                            if (playbackCancellationTokenSource?.Token.IsCancellationRequested == true)
-                            {
-                                break;
-                            }
-                            await Task.Delay(10);
+                            Log($"[StreamAudioPlayback] Cancellation requested");
+                            break;
                         }
+
+                        bufferedWaveProvider.AddSamples(buffer, 0, bytesRead);
                     }
+
+                    // Wait for playback to finish
+                    while (currentWaveOut.PlaybackState == PlaybackState.Playing && bufferedWaveProvider.BufferedBytes > 0)
+                    {
+                        await Task.Delay(50); // Check every 50 ms
+                    }
+
+                    currentWaveOut.Stop();
                 }
-                catch (Exception ex)
-                {
-                    Log($"[StreamAudioPlayback] Error during playback: {ex.Message}");
-                }
-                finally
-                {
-                    CurrentAudioState = AudioPlaybackState.Idle;
-                    currentWaveOut = null;
-                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[StreamAudioPlayback] Error during playback: {ex.Message}");
+            }
+            finally
+            {
+                CurrentAudioState = AudioPlaybackState.Idle;
+                currentWaveOut = null;
             }
         }
 
@@ -2284,6 +2451,25 @@ namespace PiperTray
 
         private void Exit(object sender, EventArgs e)
         {
+            // Reload hotkey settings from configuration to ensure they are up-to-date
+            var currentSettings = ReadCurrentSettings();
+
+            monitoringModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("MonitoringModifier", "0x00"), 16);
+            monitoringVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("MonitoringKey", "0x00"), 16);
+            stopSpeechModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("StopSpeechModifier", "0x00"), 16);
+            stopSpeechVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("StopSpeechKey", "0x00"), 16);
+            changeVoiceModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("ChangeVoiceModifier", "0x00"), 16);
+            changeVoiceVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("ChangeVoiceKey", "0x00"), 16);
+            speedIncreaseModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("SpeedIncreaseModifier", "0x00"), 16);
+            speedIncreaseVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("SpeedIncreaseKey", "0x00"), 16);
+            speedDecreaseModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("SpeedDecreaseModifier", "0x00"), 16);
+            speedDecreaseVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("SpeedDecreaseKey", "0x00"), 16);
+            switchPresetModifiers = Convert.ToUInt32(currentSettings.GetValueOrDefault("SwitchPresetModifier", "0x00"), 16);
+            switchPresetVk = Convert.ToUInt32(currentSettings.GetValueOrDefault("SwitchPresetKey", "0x00"), 16);
+
+            // Save settings before cleanup
+            SaveSettings();
+
             // Stop all background operations
             clipboardTimer?.Stop();
             UnregisterAllHotkeys();
@@ -2316,9 +2502,7 @@ namespace PiperTray
 
             if (speed.HasValue)
             {
-                Log($"[SaveSettings] Saving speed value: {speed.Value}");
                 UpdateOrAddSetting(lines, "Speed", speed.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
-                Log($"[SaveSettings] Speed value written to settings: {speed.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
             }
             if (!string.IsNullOrEmpty(voiceModel))
             {
@@ -2333,17 +2517,38 @@ namespace PiperTray
                 UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence.Value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
             }
 
-            UpdateOrAddSetting(lines, "Logging", isLoggingEnabled.ToString());
-            UpdateOrAddSetting(lines, "MonitoringModifier", $"0x{monitoringModifiers:X2}");
-            UpdateOrAddSetting(lines, "MonitoringKey", $"0x{monitoringVk:X2}");
-            UpdateOrAddSetting(lines, "StopSpeechModifier", $"0x{stopSpeechModifiers:X2}");
-            UpdateOrAddSetting(lines, "StopSpeechKey", $"0x{stopSpeechVk:X2}");
-            UpdateOrAddSetting(lines, "ChangeVoiceModifier", $"0x{changeVoiceModifiers:X2}");
-            UpdateOrAddSetting(lines, "ChangeVoiceKey", $"0x{changeVoiceVk:X2}");
-            UpdateOrAddSetting(lines, "SpeedIncreaseModifier", $"0x{speedIncreaseModifiers:X2}");
-            UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
-            UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
-            UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
+            // Only update hotkey settings if they have valid values
+            if (monitoringModifiers != 0 && monitoringVk != 0)
+            {
+                UpdateOrAddSetting(lines, "MonitoringModifier", $"0x{monitoringModifiers:X2}");
+                UpdateOrAddSetting(lines, "MonitoringKey", $"0x{monitoringVk:X2}");
+            }
+            // Repeat the above check for other hotkeys
+            if (stopSpeechModifiers != 0 && stopSpeechVk != 0)
+            {
+                UpdateOrAddSetting(lines, "StopSpeechModifier", $"0x{stopSpeechModifiers:X2}");
+                UpdateOrAddSetting(lines, "StopSpeechKey", $"0x{stopSpeechVk:X2}");
+            }
+            if (changeVoiceModifiers != 0 && changeVoiceVk != 0)
+            {
+                UpdateOrAddSetting(lines, "ChangeVoiceModifier", $"0x{changeVoiceModifiers:X2}");
+                UpdateOrAddSetting(lines, "ChangeVoiceKey", $"0x{changeVoiceVk:X2}");
+            }
+            if (speedIncreaseModifiers != 0 && speedIncreaseVk != 0)
+            {
+                UpdateOrAddSetting(lines, "SpeedIncreaseModifier", $"0x{speedIncreaseModifiers:X2}");
+                UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
+            }
+            if (speedDecreaseModifiers != 0 && speedDecreaseVk != 0)
+            {
+                UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
+                UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
+            }
+            if (switchPresetModifiers != 0 && switchPresetVk != 0)
+            {
+                UpdateOrAddSetting(lines, "SwitchPresetModifier", $"0x{switchPresetModifiers:X2}");
+                UpdateOrAddSetting(lines, "SwitchPresetKey", $"0x{switchPresetVk:X2}");
+            }
 
             try
             {
@@ -2354,24 +2559,6 @@ namespace PiperTray
             {
                 Log($"[SaveSettings] Error writing to settings.conf: {ex.Message}");
                 MessageBox.Show($"Failed to save settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        public void SaveHotkeySettings(uint modifiers, uint vk)
-        {
-            string configPath = GetConfigPath();
-            try
-            {
-                var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
-                UpdateOrAddSetting(lines, "PauseResumeModifier", $"0x{modifiers:X2}");
-                UpdateOrAddSetting(lines, "PauseResumeKey", $"0x{vk:X2}");
-                File.WriteAllLines(configPath, lines);
-                Log($"[SaveHotkeySettings] PauseResume Hotkey saved. Modifier: 0x{modifiers:X2}, Key: 0x{vk:X2}");
-            }
-            catch (Exception ex)
-            {
-                Log($"[SaveHotkeySettings] Error saving hotkey settings: {ex.Message}");
-                MessageBox.Show($"Failed to save hotkey settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -2418,10 +2605,14 @@ namespace PiperTray
                         }
                     }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // Silent exception handling
+                    Log($"[ReadCurrentSettings] Exception reading settings: {ex.Message}");
                 }
+            }
+            else
+            {
+                Log($"[ReadCurrentSettings] Config file not found at path: {configPath}");
             }
             return settings;
         }
@@ -2430,11 +2621,19 @@ namespace PiperTray
         {
             if (disposing)
             {
-                var (model, speed, logging, monitoringHotkeyModifiers, monitoringHotkeyVk,
-                    changeVoiceHotkeyModifiers, changeVoiceHotkeyVk, monitoringEnabled,
-                    speedIncreaseHotkeyModifiers, speedIncreaseHotkeyVk,
-                    speedDecreaseHotkeyModifiers, speedDecreaseHotkeyVk, speaker, sentenceSilence) = ReadSettings();
+                // Unregister all hotkeys
                 UnregisterAllHotkeys();
+
+                // Dispose of the playback cancellation token source
+                playbackCancellationTokenSource?.Dispose();
+
+                // Dispose of the clipboard timer
+                clipboardTimer?.Dispose();
+
+                // Dispose of the current WaveOutEvent if it's active
+                currentWaveOut?.Dispose();
+
+                // Dispose of the NotifyIcon
                 trayIcon?.Dispose();
             }
             base.Dispose(disposing);
