@@ -2297,7 +2297,12 @@ namespace PiperTray
 
             line = line.Replace("#", "").Replace("*", "");
 
-            line = Regex.Replace(line, @"(\w+)([.!?])(\s*)$", "$1, . . . . . . . $2$3");
+            line = Regex.Replace(
+                line,
+                @"(\w+)([.!?])(\s*)$",
+                "$1, . . . . . . . $2$3",
+                RegexOptions.CultureInvariant
+            );
 
             char[] preservePunctuation = { '.', ',', '?', '!', ':', ';' };
             var words = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
