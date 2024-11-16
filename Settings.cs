@@ -5,21 +5,30 @@ using System.Windows.Forms;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Globalization;
 
 namespace PiperTray
 {
+    public enum HotkeyId
+    {
+        SwitchPreset = 9005
+    }
+
     public class SettingsForm : Form
     {
+        private PiperTrayApp app;
         private bool _isInitialized = false;
         private bool isInitializing = true;
         private bool presetsInitialized = false;
+        private static readonly Lazy<SettingsForm> lazy = new Lazy<SettingsForm>(() => new SettingsForm());
+        private static readonly string[] MODIFIER_OPTIONS = new[] { "ALT", "CTRL", "SHIFT" };
         private static SettingsForm instance;
         private static readonly object _lock = new object();
         public TabControl TabControl => tabControl;
-        private CheckBox[] presetEnableCheckBoxes;
         private Label[] presetLabels;
         private TabPage appearanceTab;
 
+        private Dictionary<string, CheckBox> hotkeyEnableCheckboxes = new Dictionary<string, CheckBox>();
         private Dictionary<string, CheckBox> menuVisibilityCheckboxes;
         private readonly double[] speedOptions = {
             2.0, 1.9, 1.8, 1.7, 1.6, 1.5, 1.4, 1.3, 1.2, 1.1,  // -9 to 0
@@ -27,10 +36,13 @@ namespace PiperTray
         };
         private string currentVoiceModel;
 
+        private ComboBox switchPresetModifierComboBox;
+        private TextBox switchPresetKeyTextBox;
         private ComboBox speakerComboBox;
         private int currentSpeaker = 0;
         private int currentPresetIndex = -1;
         private Dictionary<string, int> speakerIdMap = new Dictionary<string, int>();
+        private Dictionary<string, int> voiceModelSpeakerCache = new Dictionary<string, int>();
 
         private NumericUpDown sentenceSilenceNumeric;
         private Label sentenceSilenceLabel;
@@ -54,26 +66,29 @@ namespace PiperTray
         private TabControl tabControl;
         private TabPage hotkeysTab;
         private TabPage presetsTab;
-        private ComboBox[] presetVoiceModelComboBoxes;
-        private ComboBox[] presetSpeakerComboBoxes;
-        private ComboBox[] presetSpeedComboBoxes;
-        private TextBox[] presetNameTextBoxes;
+
+        private TextBox[] presetNameTextBoxes = new TextBox[4];
+        private ComboBox[] presetVoiceModelComboBoxes = new ComboBox[4];
+        private ComboBox[] presetSpeakerComboBoxes = new ComboBox[4];
+        private ComboBox[] presetSpeedComboBoxes = new ComboBox[4];
+        private NumericUpDown[] presetSilenceNumericUpDowns = new NumericUpDown[4];
+        private CheckBox[] presetEnableCheckBoxes = new CheckBox[4];
 
         public class PresetSettings
         {
             public string Name { get; set; }
             public string VoiceModel { get; set; }
-            public int Speaker { get; set; }
-            public double Speed { get; set; }
-            public float SentenceSilence { get; set; }
-            public bool Enabled { get; set; }
+            public string Speaker { get; set; }
+            public string Speed { get; set; }
+            public string SentenceSilence { get; set; }
+            public string Enabled { get; set; }
         }
 
-        private NumericUpDown[] presetSilenceNumericUpDowns;
         private Button[] presetApplyButtons;
         private ComboBox VoiceModelComboBox;
         private List<string> voiceModels;
         private List<string> cachedVoiceModels;
+        private List<Panel> presetPanels = new List<Panel>();
         private bool isMonitoring;
         private ComboBox speedComboBox;
         private ComboBox stopSpeechModifierComboBox;
@@ -99,6 +114,8 @@ namespace PiperTray
         private uint speedIncreaseVk;
         private uint speedDecreaseModifiers;
         private uint speedDecreaseVk;
+        private uint switchPresetVk;
+        private uint switchPresetModifiers;
 
         private Button saveButton;
         private Button cancelButton;
@@ -110,11 +127,7 @@ namespace PiperTray
 
         public static SettingsForm GetInstance()
         {
-            if (instance == null || instance.IsDisposed)
-            {
-                instance = new SettingsForm();
-            }
-            return instance;
+            return lazy.Value;
         }
 
 
@@ -139,35 +152,123 @@ namespace PiperTray
         {
             isInitializing = true;
 
-            // First create all form controls
-            InitializeFields();
-
-            InitializeCurrentPreset();
-
-            InitializeComponent();
-
-            // Initialize UI controls after form components are ready
-            InitializeUIControls();
-
-            // Load settings last
-            LoadSettingsIntoUI();
-
-            // Set up base configuration
+            // Base setup
             string assemblyLocation = Assembly.GetExecutingAssembly().Location;
             string assemblyDirectory = Path.GetDirectoryName(assemblyLocation);
             logFilePath = Path.Combine(assemblyDirectory, "system.log");
             Log($"SettingsForm constructor called");
 
-            // Initialize window properties
+            // Initialize the PiperTrayApp instance
+            app = PiperTrayApp.Instance;
+            app.ActivePresetChanged += App_ActivePresetChanged;
+            currentPresetIndex = app.GetCurrentPresetIndex();
+
+            // Initialize form controls and arrays
+            InitializeComponent();
+            InitializeFields();
+            CreateControls();
+            InitializeCurrentPreset();
+
+            // Configure window properties
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Icon = PiperTrayApp.GetApplicationIcon();
+
+            this.MaximizeBox = false;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
 
             // Load voice models
             voiceModels = Directory.GetFiles(assemblyDirectory, "*.onnx")
                 .Select(Path.GetFileName)
                 .ToList();
 
+            // Initialize UI and settings
+            InitializeUIControls();
+            if (IsHandleCreated)
+            {
+                LoadSettingsIntoUI();
+            }
+
+            _isInitialized = true;
             isInitializing = false;
+        }
+
+        private void InitializePresetArrays()
+        {
+            int presetCount = 4; // Number of presets
+
+            // Initialize arrays with the specified size
+            presetNameTextBoxes = new TextBox[presetCount];
+            presetVoiceModelComboBoxes = new ComboBox[presetCount];
+            presetSpeakerComboBoxes = new ComboBox[presetCount];
+            presetSpeedComboBoxes = new ComboBox[presetCount];
+            presetSilenceNumericUpDowns = new NumericUpDown[presetCount];
+            presetApplyButtons = new Button[presetCount];
+            presetEnableCheckBoxes = new CheckBox[presetCount];
+            presetLabels = new Label[presetCount];
+            presetPanels = new List<Panel>();
+
+            // Initialize each control in the arrays
+            for (int i = 0; i < presetCount; i++)
+            {
+                // Initialize TextBoxes
+                presetNameTextBoxes[i] = new TextBox();
+
+                // Initialize ComboBoxes
+                presetVoiceModelComboBoxes[i] = new ComboBox();
+                presetSpeakerComboBoxes[i] = new ComboBox();
+                presetSpeedComboBoxes[i] = new ComboBox();
+
+                // Initialize NumericUpDowns
+                presetSilenceNumericUpDowns[i] = new NumericUpDown();
+
+                // Initialize Buttons
+                presetApplyButtons[i] = new Button();
+
+                // Initialize Labels and CheckBoxes
+                presetLabels[i] = new Label();
+                presetEnableCheckBoxes[i] = new CheckBox();
+            }
+        }
+
+        private void App_ActivePresetChanged(object sender, int newPresetIndex)
+        {
+            Log($"[App_ActivePresetChanged] Active preset changed to index {newPresetIndex}");
+
+            // Update currentPresetIndex
+            currentPresetIndex = newPresetIndex;
+
+            // Update the UI on the UI thread
+            if (InvokeRequired)
+            {
+                Invoke(new Action(UpdatePresetUI));
+            }
+            else
+            {
+                UpdatePresetUI();
+            }
+        }
+
+        private void UpdatePresetUI()
+        {
+            Log($"[UpdatePresetUI] Updating preset UI for current preset index {currentPresetIndex}");
+            RefreshPresetPanels();
+        }
+
+        private void CreateControls()
+        {
+            monitoringModifierComboBox = new ComboBox();
+            stopSpeechModifierComboBox = new ComboBox();
+            changeVoiceModifierComboBox = new ComboBox();
+            speedIncreaseModifierComboBox = new ComboBox();
+            speedDecreaseModifierComboBox = new ComboBox();
+            switchPresetModifierComboBox = new ComboBox();
+
+            monitoringKeyTextBox = new TextBox();
+            stopSpeechKeyTextBox = new TextBox();
+            changeVoiceKeyTextBox = new TextBox();
+            speedIncreaseKeyTextBox = new TextBox();
+            speedDecreaseKeyTextBox = new TextBox();
+            switchPresetKeyTextBox = new TextBox();
         }
 
         private void InitializeCurrentPreset()
@@ -181,16 +282,10 @@ namespace PiperTray
 
         private void InitializeFields()
         {
-            presetVoiceModelComboBoxes = new ComboBox[4];
-            presetSpeakerComboBoxes = new ComboBox[4];
-            presetSpeedComboBoxes = new ComboBox[4];
-            presetSilenceNumericUpDowns = new NumericUpDown[4];
-            presetApplyButtons = new Button[4];
-            presetNameTextBoxes = new TextBox[4];
             tabControl = new TabControl();
-            presetEnableCheckBoxes = new CheckBox[4];
-            presetLabels = new Label[4];
         }
+
+
 
         public void ShowSettingsForm()
         {
@@ -225,7 +320,7 @@ namespace PiperTray
 
         private void InitializeUIControls()
         {
-
+            Log("[InitializeUIControls] Initializing UI controls");
         }
 
         private void InitializeComboBoxes()
@@ -235,38 +330,34 @@ namespace PiperTray
 
         private void RefreshPresetPanels()
         {
-            foreach (Control control in presetsTab.Controls)
+            foreach (var panel in presetPanels)
             {
-                if (control is Panel panel)
+                panel.Paint -= Panel_Paint; // Remove any existing paint handlers
+                panel.BorderStyle = BorderStyle.None;
+                panel.BackColor = SystemColors.Control;
+
+                // Get the index of this panel
+                int panelIndex = presetPanels.IndexOf(panel);
+
+                if (panelIndex == currentPresetIndex)
                 {
-                    int panelIndex = (panel.Location.Y - (topMargin + labelHeight + controlSpacing) + 2) / rowSpacing;
-
-                    // Clear existing paint handlers
-                    panel.Paint -= new PaintEventHandler(Panel_Paint);
-                    panel.BorderStyle = BorderStyle.None;
-                    panel.BackColor = SystemColors.Control;
-
-                    if (panelIndex == currentPresetIndex)
-                    {
-                        panel.Paint += Panel_Paint;
-                        panel.BackColor = Color.FromArgb(245, 255, 245);
-                    }
-                    panel.Refresh();
+                    panel.Paint += Panel_Paint; // Add the paint handler for the active preset
                 }
+
+                panel.Invalidate(); // Force the panel to repaint
             }
         }
 
         private void Panel_Paint(object sender, PaintEventArgs e)
         {
-            if (sender is Panel panel)
+            Panel panel = sender as Panel;
+            if (panel != null)
             {
-                using (SolidBrush brush = new SolidBrush(Color.FromArgb(144, 238, 144)))  // Light green
+                using (Pen borderPen = new Pen(Color.LightGreen, 3.0f))
                 {
-                    e.Graphics.FillRectangle(brush, 0, 0, panel.Width, panel.Height);
-                }
-                using (Pen pen = new Pen(Color.FromArgb(152, 251, 152), 2))  // Pale green border
-                {
-                    e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
+                    Rectangle borderRect = panel.ClientRectangle;
+                    borderRect.Inflate(-1, -1);
+                    e.Graphics.DrawRectangle(borderPen, borderRect);
                 }
             }
         }
@@ -289,30 +380,40 @@ namespace PiperTray
 
         private void tabControl_SelectedIndexChanged(object sender, EventArgs e)
         {
-            if (tabControl.SelectedTab == presetsTab && !presetsInitialized)
-            {
-                for (int i = 0; i < 4; i++)
-                {
-                    CreatePresetPanel(i);
-                }
-                LoadSavedPresets();
-                presetsInitialized = true;
-            }
+
         }
 
         private void ApplyPreset(int index)
         {
-            var preset = new PiperTrayApp.PresetSettings
+            var preset = PiperTrayApp.GetInstance().LoadPreset(index);
+            if (preset == null)
             {
-                Name = presetNameTextBoxes[index].Text,
-                VoiceModel = presetVoiceModelComboBoxes[index].SelectedItem?.ToString(),
-                Speaker = int.Parse(presetSpeakerComboBoxes[index].SelectedItem?.ToString() ?? "0"),
-                Speed = GetSpeedValue(presetSpeedComboBoxes[index].SelectedIndex),
-                SentenceSilence = (float)presetSilenceNumericUpDowns[index].Value
-            };
+                Log($"[ApplyPreset] Preset {index + 1} is null.");
+                return;
+            }
 
-            PiperTrayApp.GetInstance().SavePreset(index, preset);
-            PiperTrayApp.GetInstance().ApplyPreset(index);
+            // Parse and apply the preset settings
+            if (double.TryParse(preset.Speed, NumberStyles.Float, CultureInfo.InvariantCulture, out double speed))
+            {
+                PiperTrayApp.GetInstance().SaveSettings(speed: speed);
+            }
+
+            if (int.TryParse(preset.Speaker, out int speaker))
+            {
+                PiperTrayApp.GetInstance().UpdateCurrentSpeaker(speaker);
+            }
+
+            if (!string.IsNullOrEmpty(preset.VoiceModel))
+            {
+                PiperTrayApp.GetInstance().SaveSettings(voiceModel: preset.VoiceModel);
+            }
+
+            if (float.TryParse(preset.SentenceSilence, NumberStyles.Float, CultureInfo.InvariantCulture, out float silence))
+            {
+                PiperTrayApp.GetInstance().SaveSettings(sentenceSilence: silence);
+            }
+
+            Log($"[ApplyPreset] Applied preset {index + 1} with Speed {speed}, Speaker {speaker}, VoiceModel {preset.VoiceModel}");
         }
 
         private void speakerComboBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -332,39 +433,64 @@ namespace PiperTray
             var mainForm = PiperTrayApp.GetInstance();
             mainForm.UnregisterAllHotkeys();
 
-            // Only register hotkeys if controls are properly initialized
-            if (AreControlsInitialized())
+            var settings = ReadCurrentSettings();
+
+            // Only register hotkeys if they are enabled
+            if (settings.TryGetValue("MonitoringHotkeyEnabled", out string monEnabled) && bool.Parse(monEnabled))
             {
-                // Register Monitoring hotkey
-                uint monitoringModifiers = GetModifierVirtualKeyCode(monitoringModifierComboBox.SelectedItem as string);
-                uint monitoringVk = GetVirtualKeyCode(monitoringKeyTextBox.Text);
+                string monitoringMod = monitoringModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string monitoringKey = monitoringKeyTextBox?.Text ?? string.Empty;
+                uint monitoringModifiers = GetModifierVirtualKeyCode(monitoringMod);
+                uint monitoringVk = GetVirtualKeyCode(monitoringKey);
                 mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_MONITORING, monitoringModifiers, monitoringVk, "Monitoring");
-
-                // Register Stop Speech hotkey
-                uint stopSpeechModifiers = GetModifierVirtualKeyCode(stopSpeechModifierComboBox.SelectedItem as string);
-                uint stopSpeechVk = GetVirtualKeyCode(stopSpeechKeyTextBox.Text);
-                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
-
-                // Register Change Voice hotkey
-                uint changeVoiceModifiers = GetModifierVirtualKeyCode(changeVoiceModifierComboBox.SelectedItem as string);
-                uint changeVoiceVk = GetVirtualKeyCode(changeVoiceKeyTextBox.Text);
-                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_CHANGE_VOICE, changeVoiceModifiers, changeVoiceVk, "Change Voice");
-
-                // Register Speed hotkeys
-                uint speedIncreaseModifiers = GetModifierVirtualKeyCode(speedIncreaseModifierComboBox.SelectedItem as string);
-                uint speedIncreaseVk = GetVirtualKeyCode(speedIncreaseKeyTextBox.Text);
-                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_SPEED_INCREASE, speedIncreaseModifiers, speedIncreaseVk, "Speed Increase");
-
-                uint speedDecreaseModifiers = GetModifierVirtualKeyCode(speedDecreaseModifierComboBox.SelectedItem as string);
-                uint speedDecreaseVk = GetVirtualKeyCode(speedDecreaseKeyTextBox.Text);
-                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_SPEED_DECREASE, speedDecreaseModifiers, speedDecreaseVk, "Speed Decrease");
-
             }
-            else
+
+            if (settings.TryGetValue("StopSpeechHotkeyEnabled", out string stopEnabled) && bool.Parse(stopEnabled))
             {
-                Log($"[RegisterHotkeys] Controls not fully initialized, skipping hotkey registration");
+                string stopSpeechMod = stopSpeechModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string stopSpeechKey = stopSpeechKeyTextBox?.Text ?? string.Empty;
+                uint stopSpeechModifiers = GetModifierVirtualKeyCode(stopSpeechMod);
+                uint stopSpeechVk = GetVirtualKeyCode(stopSpeechKey);
+                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_STOP_SPEECH, stopSpeechModifiers, stopSpeechVk, "Stop Speech");
+            }
+
+            if (settings.TryGetValue("ChangeVoiceHotkeyEnabled", out string voiceEnabled) && bool.Parse(voiceEnabled))
+            {
+                string changeVoiceMod = changeVoiceModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string changeVoiceKey = changeVoiceKeyTextBox?.Text ?? string.Empty;
+                uint changeVoiceModifiers = GetModifierVirtualKeyCode(changeVoiceMod);
+                uint changeVoiceVk = GetVirtualKeyCode(changeVoiceKey);
+                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_CHANGE_VOICE, changeVoiceModifiers, changeVoiceVk, "Change Voice");
+            }
+
+            if (settings.TryGetValue("SpeedIncreaseHotkeyEnabled", out string speedIncEnabled) && bool.Parse(speedIncEnabled))
+            {
+                string speedIncreaseMod = speedIncreaseModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string speedIncreaseKey = speedIncreaseKeyTextBox?.Text ?? string.Empty;
+                uint speedIncreaseModifiers = GetModifierVirtualKeyCode(speedIncreaseMod);
+                uint speedIncreaseVk = GetVirtualKeyCode(speedIncreaseKey);
+                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_SPEED_INCREASE, speedIncreaseModifiers, speedIncreaseVk, "Speed Increase");
+            }
+
+            if (settings.TryGetValue("SpeedDecreaseHotkeyEnabled", out string speedDecEnabled) && bool.Parse(speedDecEnabled))
+            {
+                string speedDecreaseMod = speedDecreaseModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string speedDecreaseKey = speedDecreaseKeyTextBox?.Text ?? string.Empty;
+                uint speedDecreaseModifiers = GetModifierVirtualKeyCode(speedDecreaseMod);
+                uint speedDecreaseVk = GetVirtualKeyCode(speedDecreaseKey);
+                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_SPEED_DECREASE, speedDecreaseModifiers, speedDecreaseVk, "Speed Decrease");
+            }
+
+            if (settings.TryGetValue("SwitchPresetHotkeyEnabled", out string switchEnabled) && bool.Parse(switchEnabled))
+            {
+                string switchPresetMod = switchPresetModifierComboBox?.SelectedItem?.ToString() ?? "NONE";
+                string switchPresetKey = switchPresetKeyTextBox?.Text ?? string.Empty;
+                uint switchPresetModifiers = GetModifierVirtualKeyCode(switchPresetMod);
+                uint switchPresetVk = GetVirtualKeyCode(switchPresetKey);
+                mainForm.RegisterHotkey(PiperTrayApp.HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk, "Switch Preset");
             }
         }
+
 
         protected override void WndProc(ref Message m)
         {
@@ -376,11 +502,13 @@ namespace PiperTray
 
                 Log($"[WndProc] Hotkey received. ID: {id}, Modifiers: 0x{modifiers:X2}, VK: 0x{vk:X2}");
 
+                var app = PiperTrayApp.GetInstance();
+
                 switch (id)
                 {
-                    case PiperTrayApp.HOTKEY_ID_MONITORING:
-                        Log($"[WndProc] Monitoring hotkey pressed");
-                        PiperTrayApp.GetInstance().ToggleMonitoring(null, EventArgs.Empty);
+                    case PiperTrayApp.HOTKEY_ID_SWITCH_PRESET:
+                        Log($"[WndProc] Switch Preset hotkey pressed");
+                        app.SwitchPreset();
                         break;
                 }
             }
@@ -402,6 +530,8 @@ namespace PiperTray
 
         private void InitializeComponent()
         {
+            isInitializing = true;
+
             this.Text = "Settings";
             this.Size = new System.Drawing.Size(400, 300);
 
@@ -416,14 +546,7 @@ namespace PiperTray
             tabControl.TabPages.Add(hotkeysTab);
             tabControl.TabPages.Add(presetsTab);
 
-            CreateMenuVisibilityControls();
-
-            presetVoiceModelComboBoxes = new ComboBox[4];
-            presetSpeakerComboBoxes = new ComboBox[4];
-            presetSpeedComboBoxes = new ComboBox[4];
-            presetSilenceNumericUpDowns = new NumericUpDown[4];
-            presetApplyButtons = new Button[4];
-            presetNameTextBoxes = new TextBox[4];
+            InitializePresetArrays();
 
             // Create preset panels
             for (int i = 0; i < 4; i++)
@@ -431,13 +554,23 @@ namespace PiperTray
                 CreatePresetPanel(i);
             }
 
+            CreatePresetCheckboxes();
+
+            LoadSavedPresets();
+
+            // Create the menu visibility controls
+            CreateMenuVisibilityControls();
+
+            // **Add this line to load the settings**
+            LoadMenuVisibilitySettings();
+
             // Hotkeys Tab
-            string[] modifiers = new[] { "NONE", "ALT", "CTRL", "SHIFT" };
-            AddHotkeyControls("Monitoring:", 40, modifiers);
-            AddHotkeyControls("Stop Speech:", 70, modifiers);
-            AddHotkeyControls("Change Voice:", 100, modifiers);
-            AddHotkeyControls("Speed Increase:", 130, modifiers);
-            AddHotkeyControls("Speed Decrease:", 160, modifiers);
+            AddHotkeyControls("Switch Preset:", 10, MODIFIER_OPTIONS);
+            AddHotkeyControls("Monitoring:", 40, MODIFIER_OPTIONS);
+            AddHotkeyControls("Stop Speech:", 70, MODIFIER_OPTIONS);
+            AddHotkeyControls("Change Voice:", 100, MODIFIER_OPTIONS);
+            AddHotkeyControls("Speed Increase:", 130, MODIFIER_OPTIONS);
+            AddHotkeyControls("Speed Decrease:", 160, MODIFIER_OPTIONS);
 
             this.Controls.Add(tabControl);
 
@@ -456,6 +589,95 @@ namespace PiperTray
             this.Controls.Add(cancelButton);
             cancelButton.BringToFront();
             cancelButton.Click += CancelButton_Click;
+
+            InitializeHotkeyControls();
+            LoadHotkeySettings(ReadCurrentSettings());
+
+            LoadHotkeyEnabledStates(ReadCurrentSettings());
+
+            isInitializing = false;
+        }
+
+        private void InitializeHotkeyControls()
+        {
+            foreach (ComboBox combo in new[] {
+                monitoringModifierComboBox,
+                stopSpeechModifierComboBox,
+                changeVoiceModifierComboBox,
+                speedIncreaseModifierComboBox,
+                speedDecreaseModifierComboBox,
+                switchPresetModifierComboBox
+            })
+            {
+                combo.SelectedIndex = 0;
+            }
+        }
+
+        private void AddSwitchPresetControls()
+        {
+            Label switchPresetLabel = new Label
+            {
+                Text = "Switch Preset:",
+                Location = new System.Drawing.Point(10, 190)
+            };
+            hotkeysTab.Controls.Add(switchPresetLabel);
+
+            switchPresetModifierComboBox = new ComboBox
+            {
+                Location = new System.Drawing.Point(130, 190),
+                Width = 100,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            switchPresetModifierComboBox.Items.AddRange(new[] { "NONE", "ALT", "CTRL", "SHIFT" });
+            switchPresetModifierComboBox.SelectedIndex = 0;
+            hotkeysTab.Controls.Add(switchPresetModifierComboBox);
+
+            switchPresetKeyTextBox = new TextBox
+            {
+                Location = new System.Drawing.Point(240, 190),
+                Width = 100,
+                ReadOnly = true
+            };
+            hotkeysTab.Controls.Add(switchPresetKeyTextBox);
+
+            // Add key capture handler
+            switchPresetKeyTextBox.KeyDown += (sender, e) =>
+            {
+                if (sender is TextBox textBox)
+                {
+                    e.Handled = true;
+                    if (e.KeyCode != Keys.None && e.KeyCode != Keys.Shift &&
+                        e.KeyCode != Keys.Control && e.KeyCode != Keys.Alt)
+                    {
+                        textBox.Text = e.KeyCode.ToString().ToUpper();
+                        Log($"Captured key for Switch Preset: {textBox.Text}");
+                    }
+                }
+            };
+        }
+
+        // Add this to LoadHotkeySettings()
+        private void LoadSwitchPresetSettings(Dictionary<string, string> settings)
+        {
+            if (settings.TryGetValue("SwitchPresetModifier", out string switchPresetMod))
+            {
+                uint modValue = uint.Parse(switchPresetMod.Replace("0x", ""),
+                    System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (switchPresetModifierComboBox.Items.Contains(modString))
+                {
+                    switchPresetModifierComboBox.SelectedItem = modString;
+                    Log($"[LoadHotkeySettings] Set Switch Preset modifier to: {modString}");
+                }
+            }
+
+            if (settings.TryGetValue("SwitchPresetKey", out string switchPresetKey))
+            {
+                uint keyValue = uint.Parse(switchPresetKey.Replace("0x", ""),
+                    System.Globalization.NumberStyles.HexNumber);
+                switchPresetKeyTextBox.Text = ((Keys)keyValue).ToString();
+                Log($"[LoadHotkeySettings] Set Switch Preset key to: {((Keys)keyValue).ToString()}");
+            }
         }
 
         private void CreateMenuVisibilityControls()
@@ -525,140 +747,251 @@ namespace PiperTray
 
         private void CreatePresetPanel(int index)
         {
-            // Create preset panel and controls first
+            Log($"[CreatePresetPanel] ===== Creating Preset Panel {index + 1} =====");
             presetsTab.SuspendLayout();
-            var controls = new List<Control>();
-            int rowY = topMargin + labelHeight + controlSpacing + (index * rowSpacing);
 
-            // Create panel for preset controls
+            // Create the panel for the preset
+            var presetPanel = CreateBasePanelStructure(index);
+
+            // List to hold header labels
+            List<Control> controls = new List<Control>();
+
+            if (index == 0)
+            {
+                CreateHeaderLabels(controls);
+            }
+
+            CreatePresetControls(index, presetPanel);
+            FinalizePresetPanel(index, controls, presetPanel);
+
+            presetsTab.ResumeLayout(true);
+            Log($"[CreatePresetPanel] ===== Preset Panel {index + 1} Creation Complete =====");
+        }
+
+        private bool VerifyPresetControls()
+        {
+            Log("[VerifyPresetControls] Starting control verification");
+            bool allValid = true;
+
+            for (int i = 0; i < 4; i++)
+            {
+                bool presetValid = presetNameTextBoxes[i]?.IsHandleCreated == true &&
+                                  presetVoiceModelComboBoxes[i]?.IsHandleCreated == true &&
+                                  presetSpeakerComboBoxes[i]?.IsHandleCreated == true &&
+                                  presetSpeedComboBoxes[i]?.IsHandleCreated == true &&
+                                  presetSilenceNumericUpDowns[i]?.IsHandleCreated == true &&
+                                  presetEnableCheckBoxes[i]?.IsHandleCreated == true;
+
+                Log($"[VerifyPresetControls] Preset {i + 1} validation: {(presetValid ? "Valid" : "Invalid")}");
+                allValid &= presetValid;
+            }
+
+            return allValid;
+        }
+
+        private Panel CreateBasePanelStructure(int index)
+        {
+            int rowY = topMargin + labelHeight + controlSpacing + (index * rowSpacing);
             var presetPanel = new Panel
             {
                 Location = new Point(8, rowY - 2),
                 Height = controlHeight + 4,
                 BorderStyle = BorderStyle.None
             };
+            presetPanels.Add(presetPanel);
+            return presetPanel;
+        }
 
-            // Add labels if this is the first preset
-            if (index == 0)
+        private void CreateHeaderLabels(List<Control> controls)
+        {
+            // Positions based on your layout; adjust as needed
+            int labelY = topMargin; // Position Y for the labels
+            int nameLabelX = 8; // Starting X position for the first label
+
+            // Calculate X positions based on control widths and spacings
+            int nameWidth = (columnWidth - 24);
+            int modelWidth = columnWidth;
+            int speakerWidth = columnWidth / 2;
+            int speedWidth = columnWidth / 2;
+            int silenceWidth = columnWidth / 2;
+
+            int modelLabelX = nameLabelX + nameWidth + controlSpacing;
+            int speakerLabelX = modelLabelX + modelWidth + controlSpacing;
+            int speedLabelX = speakerLabelX + speakerWidth + controlSpacing;
+            int silenceLabelX = speedLabelX + speedWidth + controlSpacing;
+
+            // Create labels and set their positions
+            Label nameLabel = new Label
             {
-                controls.AddRange(new Control[] {
-                    new Label { Text = "Name", AutoSize = true, Location = new Point(8, 2), Padding = new Padding(2) },
-                    new Label { Text = "Model", AutoSize = true, Location = new Point(columnWidth + controlSpacing - 15, 2), Padding = new Padding(2) },
-                    new Label { Text = "Speaker", AutoSize = true, Location = new Point((2 * columnWidth) + controlSpacing - 11, 2), Padding = new Padding(2) },
-                    new Label { Text = "Speed", AutoSize = true, Location = new Point((2 * columnWidth) + controlSpacing + 44, 2), Padding = new Padding(2) },
-                    new Label { Text = "Silence", AutoSize = true, Location = new Point((3 * columnWidth) + controlSpacing - 4, 2), Padding = new Padding(2) }
-                });
+                Text = "Name",
+                AutoSize = true,
+                Location = new Point(nameLabelX, labelY),
+                Padding = new Padding(2)
+            };
 
-                // Create checkbox controls at the bottom
-                int checkboxStartX = 10;
-                int checkboxSpacing = 30;
-                int bottomMargin = -80;
+            Label modelLabel = new Label
+            {
+                Text = "Model",
+                AutoSize = true,
+                Location = new Point(modelLabelX, labelY),
+                Padding = new Padding(2)
+            };
 
-                for (int i = 0; i < 4; i++)
+            Label speakerLabel = new Label
+            {
+                Text = "Speaker",
+                AutoSize = true,
+                Location = new Point(speakerLabelX, labelY),
+                Padding = new Padding(2)
+            };
+
+            Label speedLabel = new Label
+            {
+                Text = "Speed",
+                AutoSize = true,
+                Location = new Point(speedLabelX, labelY),
+                Padding = new Padding(2)
+            };
+
+            Label silenceLabel = new Label
+            {
+                Text = "Silence",
+                AutoSize = true,
+                Location = new Point(silenceLabelX, labelY),
+                Padding = new Padding(2)
+            };
+
+            // Add the labels to the controls list
+            controls.Add(nameLabel);
+            controls.Add(modelLabel);
+            controls.Add(speakerLabel);
+            controls.Add(speedLabel);
+            controls.Add(silenceLabel);
+        }
+
+        private void CreatePresetCheckboxes()
+        {
+            int checkboxStartX = 10;
+            int checkboxSpacing = 30;
+            int bottomMargin = -80;
+
+            for (int i = 0; i < 4; i++)
+            {
+                var numberLabel = new Label
                 {
-                    // Create label for preset number
-                    var numberLabel = new Label
-                    {
-                        Text = $"{i + 1}",
-                        Location = new Point(checkboxStartX + (i * checkboxSpacing), presetsTab.Height - bottomMargin),
-                        AutoSize = true
-                    };
+                    Text = $"{i + 1}",
+                    Location = new Point(checkboxStartX + (i * checkboxSpacing), presetsTab.Height - bottomMargin),
+                    AutoSize = true
+                };
 
-                    // Create checkbox below number
-                    presetEnableCheckBoxes[i] = new CheckBox
-                    {
-                        Text = "",
-                        Location = new Point(checkboxStartX + (i * checkboxSpacing), presetsTab.Height - bottomMargin + 20),
-                        AutoSize = true
-                    };
+                var checkBox = new CheckBox
+                {
+                    Text = "",
+                    Location = new Point(checkboxStartX + (i * checkboxSpacing), presetsTab.Height - bottomMargin + 20),
+                    AutoSize = true,
+                    Tag = i
+                };
 
-                    int currentIndex = i;
-                    presetEnableCheckBoxes[i].CheckedChanged += (s, e) =>
-                    {
-                        bool isEnabled = presetEnableCheckBoxes[currentIndex].Checked;
-                        presetNameTextBoxes[currentIndex].Enabled = isEnabled;
-                        presetVoiceModelComboBoxes[currentIndex].Enabled = isEnabled;
-                        presetSpeakerComboBoxes[currentIndex].Enabled = isEnabled;
-                        presetSpeedComboBoxes[currentIndex].Enabled = isEnabled;
-                        presetSilenceNumericUpDowns[currentIndex].Enabled = isEnabled;
+                checkBox.CheckedChanged += presetEnableCheckBoxes_CheckedChanged;
 
-                        // Count enabled presets
-                        int enabledCount = 0;
-                        int enabledIndex = -1;
-                        for (int j = 0; j < presetEnableCheckBoxes.Length; j++)
-                        {
-                            if (presetEnableCheckBoxes[j].Checked)
-                            {
-                                enabledCount++;
-                                enabledIndex = j;
-                            }
-                        }
+                // Store the checkbox in the array
+                presetEnableCheckBoxes[i] = checkBox;
 
-                        // If only one preset is enabled, make it active
-                        if (enabledCount == 1)
-                        {
-                            currentPresetIndex = enabledIndex;
-                            RefreshPresetPanels();
-                        }
-                    };
+                // Add controls to the UI
+                presetsTab.Controls.Add(numberLabel);
+                presetsTab.Controls.Add(checkBox);
+                numberLabel.BringToFront();
+                checkBox.BringToFront();
+            }
+        }
 
-                    presetsTab.Controls.Add(numberLabel);
-                    presetsTab.Controls.Add(presetEnableCheckBoxes[i]);
+        private void CreatePresetCheckbox(int i, int startX, int spacing, int bottomMargin)
+        {
+            var numberLabel = new Label
+            {
+                Text = $"{i + 1}",
+                Location = new Point(startX + (i * spacing), presetsTab.Height - bottomMargin),
+                AutoSize = true
+            };
 
-                    numberLabel.BringToFront();
-                    presetEnableCheckBoxes[i].BringToFront();
+            presetEnableCheckBoxes[i] = new CheckBox
+            {
+                Text = "",
+                Location = new Point(startX + (i * spacing), presetsTab.Height - bottomMargin + 20),
+                AutoSize = true
+            };
+
+            SetupCheckboxEvents(i);
+            AddCheckboxControls(numberLabel, presetEnableCheckBoxes[i]);
+        }
+
+        private void CreatePresetControls(int index, Panel presetPanel)
+        {
+            // Load the preset data first
+            var preset = PiperTrayApp.GetInstance().LoadPreset(index);
+
+            CreateNameTextBox(index);
+            if (preset?.Name != null)
+            {
+                presetNameTextBoxes[index].Text = preset.Name;
+            }
+
+            CreateVoiceModelComboBox(index);
+            if (preset?.VoiceModel != null)
+            {
+                int modelIndex = presetVoiceModelComboBoxes[index].Items.IndexOf(preset.VoiceModel);
+                if (modelIndex >= 0)
+                {
+                    presetVoiceModelComboBoxes[index].SelectedIndex = modelIndex;
                 }
             }
 
-            presetsTab.SuspendLayout();
+            CreateSpeakerComboBox(index);
+            if (preset?.Speaker != null)
+            {
+                presetSpeakerComboBoxes[index].SelectedItem = preset.Speaker;
+            }
 
-            // Create panel for active preset
+            CreateSpeedComboBox(index);
+            if (preset?.Speed != null && double.TryParse(preset.Speed, out double speed))
+            {
+                int speedIndex = GetSpeedIndex(speed);
+                presetSpeedComboBoxes[index].SelectedIndex = speedIndex + 9;
+            }
+
+            CreateSilenceNumericUpDown(index);
+            if (preset?.SentenceSilence != null && decimal.TryParse(preset.SentenceSilence, out decimal silence))
+            {
+                presetSilenceNumericUpDowns[index].Value = silence;
+            }
+
+            // Set enabled state from preset
+            if (preset != null)
+            {
+                bool isEnabled = bool.Parse(preset.Enabled);
+                presetEnableCheckBoxes[index].Checked = isEnabled;
+                UpdatePresetControlsEnabled(index, isEnabled);
+            }
+
+            presetPanel.Width = presetSilenceNumericUpDowns[index].Right + 4;
+            AddControlsToPanel(index, presetPanel);
+        }
+
+
+        private void FinalizePresetPanel(int index, List<Control> controls, Panel presetPanel)
+        {
+            presetsTab.Controls.Add(presetPanel);
+            controls.Add(presetPanel);
+            presetsTab.Controls.AddRange(controls.ToArray());
 
             if (index == 0)
             {
-                var nameLabel = new Label
-                {
-                    Text = "Name",
-                    AutoSize = true,
-                    Location = new Point(8, 2),
-                    Padding = new Padding(2)
-                };
-
-                var modelLabel = new Label
-                {
-                    Text = "Model",
-                    AutoSize = true,
-                    Location = new Point(columnWidth + controlSpacing - 15, 2),
-                    Padding = new Padding(2)
-                };
-
-                var speakerLabel = new Label
-                {
-                    Text = "Speaker",
-                    AutoSize = true,
-                    Location = new Point((2 * columnWidth) + controlSpacing - 11, 2),
-                    Padding = new Padding(2)
-                };
-
-                var speedLabel = new Label
-                {
-                    Text = "Speed",
-                    AutoSize = true,
-                    Location = new Point((2 * columnWidth) + controlSpacing + 44, 2),
-                    Padding = new Padding(2)
-                };
-
-                var silenceLabel = new Label
-                {
-                    Text = "Silence",
-                    AutoSize = true,
-                    Location = new Point((3 * columnWidth) + controlSpacing - 4, 2),
-                    Padding = new Padding(2)
-                };
-
-                controls.AddRange(new Control[] { nameLabel, modelLabel, speakerLabel, speedLabel, silenceLabel });
+                BringLabelsToFront(controls);
             }
+        }
 
+        private void CreateNameTextBox(int index)
+        {
             presetNameTextBoxes[index] = new TextBox
             {
                 Location = new Point(2, 2),
@@ -666,7 +999,10 @@ namespace PiperTray
                 Text = $"Preset {index + 1}"
             };
             presetNameTextBoxes[index].TextChanged += (s, e) => UpdatePresetName(index);
+        }
 
+        private void CreateVoiceModelComboBox(int index)
+        {
             presetVoiceModelComboBoxes[index] = new ComboBox
             {
                 Location = new Point(presetNameTextBoxes[index].Right + controlSpacing, 2),
@@ -674,33 +1010,109 @@ namespace PiperTray
             };
             PopulateVoiceModelComboBox(presetVoiceModelComboBoxes[index]);
             presetVoiceModelComboBoxes[index].SelectedIndexChanged += (s, e) => UpdatePresetSpeakers(index);
+        }
 
+        private void CreateSpeakerComboBox(int index)
+        {
             presetSpeakerComboBoxes[index] = new ComboBox
             {
                 Location = new Point(presetVoiceModelComboBoxes[index].Right + controlSpacing, 2),
                 Width = columnWidth / 2
             };
 
+            string selectedModel = presetVoiceModelComboBoxes[index].SelectedItem?.ToString();
+            if (selectedModel != null)
+            {
+                int speakerCount = GetSpeakerCountFromCache(selectedModel);
+
+                for (int i = 0; i < speakerCount; i++)
+                {
+                    presetSpeakerComboBoxes[index].Items.Add(i.ToString());
+                }
+            }
+
+            // Get preset value from settings
+            var preset = PiperTrayApp.GetInstance().LoadPreset(index);
+            if (preset?.Speaker != null)
+            {
+                presetSpeakerComboBoxes[index].SelectedItem = preset.Speaker;
+            }
+            else if (presetSpeakerComboBoxes[index].Items.Count > 0)
+            {
+                presetSpeakerComboBoxes[index].SelectedIndex = 0;
+            }
+        }
+
+        private int GetSpeakerCountFromCache(string modelName)
+        {
+            if (voiceModelSpeakerCache.TryGetValue(modelName, out int cachedCount))
+            {
+                return cachedCount;
+            }
+            else
+            {
+                int speakerCount = LoadSpeakerCountFromFile(modelName);
+                voiceModelSpeakerCache[modelName] = speakerCount;
+                return speakerCount;
+            }
+        }
+
+        private int LoadSpeakerCountFromFile(string modelName)
+        {
+            string jsonPath = Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                $"{modelName}.onnx.json"
+            );
+
+            if (File.Exists(jsonPath))
+            {
+                string jsonContent = File.ReadAllText(jsonPath);
+                using JsonDocument doc = JsonDocument.Parse(jsonContent);
+                if (doc.RootElement.TryGetProperty("num_speakers", out JsonElement numSpeakers))
+                {
+                    return numSpeakers.GetInt32();
+                }
+            }
+            // Default to 1 speaker if not found
+            return 1;
+        }
+
+        private void CreateSpeedComboBox(int index)
+        {
             presetSpeedComboBoxes[index] = new ComboBox
             {
                 Location = new Point(presetSpeakerComboBoxes[index].Right + controlSpacing, 2),
                 Width = columnWidth / 2
             };
 
-            Log($"[CreatePresetPanel] Initializing speed combobox for preset {index}");
-
-            // Clear existing items
             presetSpeedComboBoxes[index].Items.Clear();
 
-            // Add items from -9 to 10
             for (int i = -9; i <= 10; i++)
             {
                 presetSpeedComboBoxes[index].Items.Add(i.ToString());
-                Log($"[CreatePresetPanel] Added speed option: {i}");
             }
 
-            presetSpeedComboBoxes[index].SelectedIndex = 9; // Index 9 corresponds to value 0
+            SetupSpeedComboBoxEvents(index);
+            LoadSpeedSettings(index);
+        }
 
+        private void CreateSilenceNumericUpDown(int index)
+        {
+            presetSilenceNumericUpDowns[index] = new NumericUpDown
+            {
+                Location = new Point(presetSpeedComboBoxes[index].Right + controlSpacing, 2),
+                Width = columnWidth / 2,
+                DecimalPlaces = 1,
+                Increment = 0.1m,
+                Minimum = 0.0m,
+                Maximum = 2.0m,
+                Value = 0.5m
+            };
+        }
+
+        private void SetupSpeedComboBoxEvents(int index)
+        {
+            presetSpeedComboBoxes[index].SelectedIndex = 9;
             presetSpeedComboBoxes[index].SelectedIndexChanged += (s, e) =>
             {
                 if (!isInitializing && index == currentPresetIndex && s is ComboBox cb && cb.SelectedItem != null)
@@ -714,7 +1126,10 @@ namespace PiperTray
                     }
                 }
             };
+        }
 
+        private void LoadSpeedSettings(int index)
+        {
             if (index == currentPresetIndex)
             {
                 var settings = PiperTrayApp.GetInstance().ReadCurrentSettings();
@@ -723,49 +1138,115 @@ namespace PiperTray
                     if (double.TryParse(speedValue, out double speed))
                     {
                         int speedIndex = GetSpeedIndex(speed);
-                        presetSpeedComboBoxes[index].SelectedIndex = speedIndex + 9; // Adjust for -9 offset
+                        presetSpeedComboBoxes[index].SelectedIndex = speedIndex + 9;
                     }
                 }
             }
+        }
 
-            presetSilenceNumericUpDowns[index] = new NumericUpDown
+        private void SetupCheckboxEvents(int index)
+        {
+            presetEnableCheckBoxes[index].CheckedChanged += presetEnableCheckBoxes_CheckedChanged;
+        }
+
+        private void presetEnableCheckBoxes_CheckedChanged(object sender, EventArgs e)
+        {
+            if (!isInitializing && sender is CheckBox checkBox && int.TryParse(checkBox.Tag.ToString(), out int presetIndex))
             {
-                Location = new Point(presetSpeedComboBoxes[index].Right + controlSpacing, 2),
-                Width = columnWidth / 2,
-                DecimalPlaces = 1,
-                Increment = 0.1m,
-                Minimum = 0.0m,
-                Maximum = 2.0m,
-                Value = 0.5m
-            };
+                bool isEnabled = checkBox.Checked;
+                UpdatePresetControlsState(presetIndex, isEnabled);
 
-            // Set panel width based on last control
-            presetPanel.Width = presetSilenceNumericUpDowns[index].Right + 4;
-
-            // Add controls to panel
-            presetPanel.Controls.AddRange(new Control[] {
-                presetNameTextBoxes[index],
-                presetVoiceModelComboBoxes[index],
-                presetSpeakerComboBoxes[index],
-                presetSpeedComboBoxes[index],
-                presetSilenceNumericUpDowns[index]
-            });
-
-            controls.Add(presetPanel);
-            presetsTab.Controls.AddRange(controls.ToArray());
-
-            if (index == 0)
-            {
-                foreach (Control control in controls)
+                var preset = PiperTrayApp.GetInstance().LoadPreset(presetIndex);
+                if (preset != null)
                 {
-                    if (control is Label)
+                    preset.Enabled = isEnabled.ToString();
+                    PiperTrayApp.GetInstance().SavePreset(presetIndex, preset);
+                }
+            }
+        }
+
+        private void PresetEnableCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            if (sender is CheckBox checkBox && int.TryParse(checkBox.Tag.ToString(), out int presetIndex))
+            {
+                bool isEnabled = checkBox.Checked;
+                Log($"[PresetEnableCheckBox_CheckedChanged] Preset {presetIndex} checkbox changed to: {isEnabled}");
+
+                // Suspend layout updates
+                presetPanels[presetIndex].SuspendLayout();
+
+                try
+                {
+                    UpdatePresetControlsState(presetIndex, isEnabled);
+
+                    var preset = PiperTrayApp.GetInstance().LoadPreset(presetIndex);
+                    if (preset != null)
                     {
-                        control.BringToFront();
+                        preset.Enabled = isEnabled.ToString();
+                        PiperTrayApp.GetInstance().SavePreset(presetIndex, preset);
+                        Log($"[PresetEnableCheckBox_CheckedChanged] Saved preset {presetIndex} enabled state: {isEnabled}");
                     }
+                }
+                finally
+                {
+                    // Resume and force layout update
+                    presetPanels[presetIndex].ResumeLayout(true);
+                    presetPanels[presetIndex].Refresh();
+                }
+            }
+        }
+
+        private void UpdateActivePreset()
+        {
+            int enabledCount = 0;
+            int enabledIndex = -1;
+
+            for (int j = 0; j < presetEnableCheckBoxes.Length; j++)
+            {
+                if (presetEnableCheckBoxes[j].Checked)
+                {
+                    enabledCount++;
+                    enabledIndex = j;
                 }
             }
 
-            presetsTab.ResumeLayout(true);
+            if (enabledCount == 1)
+            {
+                currentPresetIndex = enabledIndex;
+                PiperTrayApp.GetInstance().ApplyPreset(enabledIndex);
+                RefreshPresetPanels();
+                Log($"[UpdateActivePreset] Set active preset to index: {enabledIndex}");
+            }
+        }
+
+        private void AddControlsToPanel(int index, Panel presetPanel)
+        {
+            presetPanel.Controls.AddRange(new Control[] {
+        presetNameTextBoxes[index],
+        presetVoiceModelComboBoxes[index],
+        presetSpeakerComboBoxes[index],
+        presetSpeedComboBoxes[index],
+        presetSilenceNumericUpDowns[index]
+    });
+        }
+
+        private void AddCheckboxControls(Label numberLabel, CheckBox checkbox)
+        {
+            presetsTab.Controls.Add(numberLabel);
+            presetsTab.Controls.Add(checkbox);
+            numberLabel.BringToFront();
+            checkbox.BringToFront();
+        }
+
+        private void BringLabelsToFront(List<Control> controls)
+        {
+            foreach (Control control in controls)
+            {
+                if (control is Label)
+                {
+                    control.BringToFront();
+                }
+            }
         }
 
         private void UpdatePresetIndicators()
@@ -786,9 +1267,10 @@ namespace PiperTray
             {
                 Name = presetNameTextBoxes[index].Text,
                 VoiceModel = presetVoiceModelComboBoxes[index].SelectedItem?.ToString(),
-                Speaker = int.Parse(presetSpeakerComboBoxes[index].SelectedItem?.ToString() ?? "0"),
-                Speed = GetSpeedValue(presetSpeedComboBoxes[index].SelectedIndex),
-                SentenceSilence = (float)presetSilenceNumericUpDowns[index].Value
+                Speaker = presetSpeakerComboBoxes[index].SelectedItem?.ToString() ?? "0",
+                Speed = GetSpeedValue(presetSpeedComboBoxes[index].SelectedIndex).ToString(CultureInfo.InvariantCulture),
+                SentenceSilence = presetSilenceNumericUpDowns[index].Value.ToString(CultureInfo.InvariantCulture),
+                Enabled = "true"
             };
 
             PiperTrayApp.GetInstance().SavePreset(index, preset);
@@ -801,8 +1283,13 @@ namespace PiperTray
                 string selectedModel = presetVoiceModelComboBoxes[index].SelectedItem.ToString();
                 string jsonPath = Path.Combine(
                     Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                    $"{selectedModel}.onnx.json"
+                    $"{selectedModel}.onnx.json"  // Updated extension
                 );
+
+                Log($"[UpdatePresetSpeakers] Loading speakers for model: {selectedModel}");
+                Log($"[UpdatePresetSpeakers] JSON path: {jsonPath}");
+
+                presetSpeakerComboBoxes[index].Items.Clear();
 
                 if (File.Exists(jsonPath))
                 {
@@ -810,70 +1297,118 @@ namespace PiperTray
                     using JsonDocument doc = JsonDocument.Parse(jsonContent);
                     if (doc.RootElement.TryGetProperty("num_speakers", out JsonElement numSpeakers))
                     {
-                        presetSpeakerComboBoxes[index].Items.Clear();
-                        for (int i = 0; i < numSpeakers.GetInt32(); i++)
+                        int speakerCount = numSpeakers.GetInt32();
+                        Log($"[UpdatePresetSpeakers] Found {speakerCount} speakers for model {selectedModel}");
+
+                        for (int i = 0; i < speakerCount; i++)
                         {
                             presetSpeakerComboBoxes[index].Items.Add(i.ToString());
                         }
-                        if (presetSpeakerComboBoxes[index].Items.Count > 0)
-                        {
-                            presetSpeakerComboBoxes[index].SelectedIndex = 0;
-                        }
                     }
+                    else
+                    {
+                        Log($"[UpdatePresetSpeakers] No num_speakers found for {selectedModel}, defaulting to single speaker");
+                        presetSpeakerComboBoxes[index].Items.Add("0");
+                    }
+                }
+                else
+                {
+                    Log($"[UpdatePresetSpeakers] JSON file not found for {selectedModel}, defaulting to single speaker");
+                    presetSpeakerComboBoxes[index].Items.Add("0");
+                }
+
+                if (presetSpeakerComboBoxes[index].Items.Count > 0)
+                {
+                    presetSpeakerComboBoxes[index].SelectedIndex = 0;
                 }
             }
         }
 
         private void LoadSavedPresets()
         {
-            Log("[LoadSavedPresets] Starting to load saved presets");
-            isInitializing = true;  // Add this flag
-
             for (int i = 0; i < 4; i++)
             {
-                var preset = PiperTrayApp.GetInstance().LoadPreset(i);
+                var preset = app.LoadPreset(i);
                 if (preset != null)
                 {
-                    Log($"[LoadSavedPresets] Loading preset {i + 1}: Name={preset.Name}, Model={preset.VoiceModel}, Speed={preset.Speed}, Enabled={preset.Enabled}");
-
-                    // Set values without triggering change events
-                    presetNameTextBoxes[i].TextChanged -= new EventHandler((s, e) => UpdatePresetName(i));
-                    presetVoiceModelComboBoxes[i].SelectedIndexChanged -= (s, e) => UpdatePresetSpeakers(i);
-
-                    presetNameTextBoxes[i].Text = preset.Name;
-
-                    int modelIndex = presetVoiceModelComboBoxes[i].Items.IndexOf(preset.VoiceModel);
-                    if (modelIndex >= 0)
-                    {
-                        presetVoiceModelComboBoxes[i].SelectedIndex = modelIndex;
-                        Log($"[LoadSavedPresets] Set model index to {modelIndex} for preset {i + 1}");
-                    }
-
-                    presetSpeakerComboBoxes[i].SelectedItem = preset.Speaker.ToString();
-                    presetSpeedComboBoxes[i].SelectedItem = GetSpeedIndex(preset.Speed).ToString();
-                    presetSilenceNumericUpDowns[i].Value = (decimal)preset.SentenceSilence;
-
-                    // Set enabled state and update controls
-                    presetEnableCheckBoxes[i].Checked = preset.Enabled;
-                    UpdatePresetControlsEnabled(i, preset.Enabled);
-
-                    // Reattach event handlers
-                    presetNameTextBoxes[i].TextChanged += new EventHandler((s, e) => UpdatePresetName(i));
-                    presetVoiceModelComboBoxes[i].SelectedIndexChanged += (s, e) => UpdatePresetSpeakers(i);
+                    bool isEnabled = preset.EnabledBool;
+                    presetEnableCheckBoxes[i].Checked = isEnabled;
+                    UpdatePresetControlsState(i, isEnabled);
                 }
             }
+        }
 
-            isInitializing = false;  // Reset the flag
-            Log("[LoadSavedPresets] Finished loading saved presets");
+        private void UpdatePresetControlsState(int presetIndex, bool enabled)
+        {
+            Log($"[UpdatePresetControlsState] Updating controls for preset {presetIndex + 1}");
+            Log($"  Enabled state: {enabled}");
+
+            // Get the panel containing all controls for this preset
+            Panel presetPanel = presetPanels[presetIndex];
+
+            // Update all controls within the preset panel
+            foreach (Control control in presetPanel.Controls)
+            {
+                control.Enabled = enabled;
+
+                // Apply BackColor and ForeColor for relevant control types
+                if (control is TextBox || control is ComboBox || control is NumericUpDown)
+                {
+                    control.BackColor = enabled ? SystemColors.Window : SystemColors.Control;
+                    control.ForeColor = enabled ? SystemColors.WindowText : SystemColors.GrayText;
+                }
+
+                // Force immediate visual refresh
+                control.Refresh();
+            }
+
+            // Force panel refresh
+            presetPanel.Refresh();
+
+            Log($"[UpdatePresetControlsState] Controls updated and refreshed for preset {presetIndex + 1}");
         }
 
         private void UpdatePresetControlsEnabled(int index, bool enabled)
         {
-            presetNameTextBoxes[index].Enabled = enabled;
-            presetVoiceModelComboBoxes[index].Enabled = enabled;
-            presetSpeakerComboBoxes[index].Enabled = enabled;
-            presetSpeedComboBoxes[index].Enabled = enabled;
-            presetSilenceNumericUpDowns[index].Enabled = enabled;
+            var controls = new Control[]
+            {
+                presetNameTextBoxes[index],
+                presetVoiceModelComboBoxes[index],
+                presetSpeakerComboBoxes[index],
+                presetSpeedComboBoxes[index],
+                presetSilenceNumericUpDowns[index]
+            };
+
+            foreach (var control in controls)
+            {
+                control.Enabled = enabled;
+                control.BackColor = enabled ? SystemColors.Window : SystemColors.Control;
+                control.ForeColor = enabled ? SystemColors.WindowText : SystemColors.GrayText;
+            }
+        }
+
+        private void presetNameTextBoxes_TextChanged(object sender, EventArgs e)
+        {
+            if (!isInitializing && sender is TextBox textBox)
+            {
+                int index = Array.IndexOf(presetNameTextBoxes, textBox);
+                if (index >= 0)
+                {
+                    UpdatePresetName(index);
+                }
+            }
+        }
+
+        private void presetVoiceModelComboBoxes_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (!isInitializing && sender is ComboBox comboBox)
+            {
+                int index = Array.IndexOf(presetVoiceModelComboBoxes, comboBox);
+                if (index >= 0)
+                {
+                    UpdatePresetSpeakers(index);
+                }
+            }
         }
 
         private void PopulateSpeakerComboBox(string modelName)
@@ -1037,7 +1572,7 @@ namespace PiperTray
             modifierComboBox.Location = new System.Drawing.Point(130, yPosition);
             modifierComboBox.Width = 100;
             modifierComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
-            modifierComboBox.Items.AddRange(modifiers);
+            modifierComboBox.Items.AddRange(MODIFIER_OPTIONS);
             modifierComboBox.SelectedIndex = 0;
             hotkeysTab.Controls.Add(modifierComboBox);
 
@@ -1046,6 +1581,18 @@ namespace PiperTray
             keyTextBox.Width = 100;
             keyTextBox.ReadOnly = true;
             hotkeysTab.Controls.Add(keyTextBox);
+
+            CheckBox enableCheckBox = new CheckBox();
+            enableCheckBox.Location = new System.Drawing.Point(350, yPosition);
+            enableCheckBox.Width = 20;
+            enableCheckBox.Checked = true;
+            enableCheckBox.CheckedChanged += (sender, e) =>
+            {
+                modifierComboBox.Enabled = enableCheckBox.Checked;
+                keyTextBox.Enabled = enableCheckBox.Checked;
+            };
+            hotkeysTab.Controls.Add(enableCheckBox);
+            hotkeyEnableCheckboxes[labelText] = enableCheckBox;
 
             keyTextBox.KeyDown += (sender, e) =>
             {
@@ -1061,6 +1608,10 @@ namespace PiperTray
                         // Store the values immediately based on the control type
                         switch (labelText)
                         {
+                            case "Switch Preset:":
+                                switchPresetModifierComboBox = modifierComboBox;
+                                switchPresetKeyTextBox = keyTextBox;
+                                break;
                             case "Monitoring:":
                                 monitoringVk = (uint)e.KeyCode;
                                 monitoringModifiers = GetModifierVirtualKeyCode(monitoringModifierComboBox.SelectedItem?.ToString() ?? "NONE");
@@ -1124,6 +1675,10 @@ namespace PiperTray
             // Store references to controls based on label text
             switch (labelText)
             {
+                case "Switch Preset:":
+                    switchPresetModifierComboBox = modifierComboBox;
+                    switchPresetKeyTextBox = keyTextBox;
+                    break;
                 case "Monitoring:":
                     monitoringModifierComboBox = modifierComboBox;
                     monitoringKeyTextBox = keyTextBox;
@@ -1149,6 +1704,29 @@ namespace PiperTray
             Log($"[AddHotkeyControls] Controls added for {labelText}. ModifierComboBox items: {modifierComboBox.Items.Count}");
         }
 
+        private void LoadHotkeyEnabledStates(Dictionary<string, string> settings)
+        {
+            foreach (var pair in hotkeyEnableCheckboxes)
+            {
+                string settingName = pair.Key.Replace(":", "").Replace(" ", "") + "HotkeyEnabled";
+                if (settings.TryGetValue(settingName, out string enabledStr))
+                {
+                    if (bool.TryParse(enabledStr, out bool enabled))
+                    {
+                        pair.Value.Checked = enabled;
+                    }
+                }
+            }
+        }
+
+        private void SaveHotkeyEnabledStates(List<string> lines)
+        {
+            foreach (var pair in hotkeyEnableCheckboxes)
+            {
+                string settingName = pair.Key.Replace(":", "").Replace(" ", "") + "HotkeyEnabled";
+                UpdateOrAddSetting(lines, settingName, pair.Value.Checked.ToString());
+            }
+        }
 
         private void CancelButton_Click(object sender, EventArgs e)
         {
@@ -1209,48 +1787,152 @@ namespace PiperTray
             }
         }
 
-
-
         private void LoadSettingsIntoUI()
         {
+            Log($"[LoadSettingsIntoUI] ===== Starting Settings Load Process =====");
+
+            if (!IsHandleCreated)
+            {
+                CreateHandle();
+                Log($"[LoadSettingsIntoUI] Handle created for the form");
+            }
+
             isInitializing = true;
             string configPath = PiperTrayApp.GetInstance().GetConfigPath();
-            Log($"Loading settings from: {configPath}");
+            Log($"[LoadSettingsIntoUI] Loading settings from: {configPath}");
 
-            if (File.Exists(configPath))
+            try
             {
-                var settings = File.ReadAllLines(configPath)
-                    .Where(line => line.Contains("="))
-                    .ToDictionary(
-                        line => line.Split('=')[0].Trim(),
-                        line => line.Split('=')[1].Trim(),
-                        StringComparer.OrdinalIgnoreCase
-                    );
-
-                LoadSavedPresets();
-                LoadMenuVisibilitySettings();
-                LoadHotkeySettings(settings);
-
-                if (settings.TryGetValue("Speed", out string speedValue))
+                if (File.Exists(configPath))
                 {
-                    if (double.TryParse(speedValue, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out double speed))
+                    var settings = ReadSettingsFromFile(configPath);
+                    InitializeUIWithSettings(settings);
+                }
+                else
+                {
+                    Log($"[LoadSettingsIntoUI] Settings file not found at: {configPath}. Using defaults.");
+                    SetDefaultValues();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[LoadSettingsIntoUI] Error loading settings: {ex.Message}");
+                SetDefaultValues();
+            }
+            finally
+            {
+                _isInitialized = true;
+                isInitializing = false;
+                Log($"[LoadSettingsIntoUI] ===== Settings Load Complete =====");
+            }
+        }
+
+        private Dictionary<string, string> ReadSettingsFromFile(string configPath)
+        {
+            var settings = File.ReadAllLines(configPath)
+                .Where(line => !string.IsNullOrWhiteSpace(line) && line.Contains("="))
+                .ToDictionary(
+                    line => line.Split('=')[0].Trim(),
+                    line => line.Split('=')[1].Trim(),
+                    StringComparer.OrdinalIgnoreCase
+                );
+            Log($"[ReadSettingsFromFile] Loaded {settings.Count} settings");
+            return settings;
+        }
+
+        private void InitializeUIWithSettings(Dictionary<string, string> settings)
+        {
+            foreach (var preset in settings.Where(s => s.Key.StartsWith("Preset", StringComparison.OrdinalIgnoreCase)))
+            {
+                int presetIndex = int.Parse(preset.Key.Replace("Preset", "")) - 1;
+                var presetSettings = JsonSerializer.Deserialize<PiperTrayApp.PresetSettings>(preset.Value);
+
+                if (presetSettings != null)
+                {
+                    ApplyPresetToUI(presetIndex, presetSettings);
+                }
+            }
+        }
+
+        private void ApplyPresetToUI(int index, PiperTrayApp.PresetSettings preset)
+        {
+            if (presetNameTextBoxes[index] != null)
+            {
+                presetNameTextBoxes[index].Text = preset.Name;
+            }
+
+            if (presetVoiceModelComboBoxes[index] != null)
+            {
+                int modelIndex = presetVoiceModelComboBoxes[index].Items.IndexOf(preset.VoiceModel);
+                if (modelIndex >= 0)
+                {
+                    presetVoiceModelComboBoxes[index].SelectedIndex = modelIndex;
+                }
+            }
+
+            if (presetSpeakerComboBoxes[index] != null && preset.Speaker != null)
+            {
+                presetSpeakerComboBoxes[index].SelectedItem = preset.Speaker;
+            }
+
+            if (presetSpeedComboBoxes[index] != null && double.TryParse(preset.Speed, out double speed))
+            {
+                int speedIndex = GetSpeedIndex(speed);
+                presetSpeedComboBoxes[index].SelectedIndex = speedIndex + 9;
+            }
+
+            if (presetSilenceNumericUpDowns[index] != null && decimal.TryParse(preset.SentenceSilence, out decimal silence))
+            {
+                presetSilenceNumericUpDowns[index].Value = silence;
+            }
+
+            if (presetEnableCheckBoxes[index] != null)
+            {
+                presetEnableCheckBoxes[index].Checked = bool.Parse(preset.Enabled);
+            }
+        }
+
+        private void LogSettingsContent(Dictionary<string, string> settings)
+        {
+            Log($"[LogSettingsContent] ===== Settings Content =====");
+            foreach (var preset in settings.Where(s => s.Key.StartsWith("Preset")))
+            {
+                Log($"[LogSettingsContent] {preset.Key}: {preset.Value}");
+            }
+            Log($"[LogSettingsContent] Current VoiceModel: {settings.GetValueOrDefault("VoiceModel")}");
+            Log($"[LogSettingsContent] Current Speed: {settings.GetValueOrDefault("Speed")}");
+            Log($"[LogSettingsContent] Current Speaker: {settings.GetValueOrDefault("Speaker")}");
+        }
+
+        private void LoadSpeedSettings(Dictionary<string, string> settings)
+        {
+            if (settings.TryGetValue("Speed", out string speedValue))
+            {
+                if (double.TryParse(speedValue, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double speed))
+                {
+                    int speedIndex = GetSpeedIndex(speed);
+                    speedIndex = Math.Max(0, Math.Min(presetSpeedComboBoxes[currentPresetIndex].Items.Count - 1, speedIndex + 9));
+                    Log($"[LoadSpeedSettings] Setting speed for preset {currentPresetIndex} to: {speed} (index: {speedIndex})");
+
+                    if (presetSpeedComboBoxes[currentPresetIndex].Items.Count > speedIndex)
                     {
-                        int speedIndex = GetSpeedIndex(speed);
-                        // Ensure index is within valid range (0 to ComboBox items count - 1)
-                        speedIndex = Math.Max(0, Math.Min(presetSpeedComboBoxes[currentPresetIndex].Items.Count - 1, speedIndex + 9));
-                        Log($"Setting active preset (index: {currentPresetIndex}) speed to: {speed} (adjusted combobox index: {speedIndex})");
                         presetSpeedComboBoxes[currentPresetIndex].SelectedIndex = speedIndex;
+                        Log($"[LoadSpeedSettings] Speed index set successfully");
                     }
                 }
             }
-            else
-            {
-                Log($"Settings file not found at: {configPath}");
-            }
+        }
 
-            _isInitialized = true;
-            isInitializing = false;
+        private void SetDefaultValues()
+        {
+            foreach (var checkbox in hotkeyEnableCheckboxes.Values)
+            {
+                if (checkbox != null && checkbox.IsHandleCreated)
+                {
+                    checkbox.Checked = true;
+                }
+            }
         }
 
 
@@ -1258,132 +1940,243 @@ namespace PiperTray
         {
             try
             {
-                Log($"[LoadHotkeySettings] Starting to load hotkey settings");
-                foreach (var setting in settings)
-                {
-                    Log($"[LoadHotkeySettings] Found setting: {setting.Key}={setting.Value}");
-                }
+                LogInitialState(settings);
 
-                // Log UI control states
-                Log($"[LoadHotkeySettings] Control states:");
-                Log($"MonitoringModifierComboBox initialized: {monitoringModifierComboBox?.IsHandleCreated}, Items: {monitoringModifierComboBox?.Items.Count}");
-                Log($"StopSpeechModifierComboBox initialized: {stopSpeechModifierComboBox?.IsHandleCreated}, Items: {stopSpeechModifierComboBox?.Items.Count}");
-                Log($"ChangeVoiceModifierComboBox initialized: {changeVoiceModifierComboBox?.IsHandleCreated}, Items: {changeVoiceModifierComboBox?.Items.Count}");
-                Log($"SpeedIncreaseModifierComboBox initialized: {speedIncreaseModifierComboBox?.IsHandleCreated}, Items: {speedIncreaseModifierComboBox?.Items.Count}");
-                Log($"SpeedDecreaseModifierComboBox initialized: {speedDecreaseModifierComboBox?.IsHandleCreated}, Items: {speedDecreaseModifierComboBox?.Items.Count}");
-
-                // Monitoring hotkey (working correctly)
-                if (settings.TryGetValue("MonitoringModifier", out string monMod) && !string.IsNullOrEmpty(monMod))
-                {
-                    uint modValue = uint.Parse(monMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    string modString = GetModifierString(modValue);
-                    if (monitoringModifierComboBox.Items.Contains(modString))
-                    {
-                        monitoringModifierComboBox.SelectedItem = modString;
-                        Log($"Set Monitoring modifier to: {modString}");
-                    }
-                }
-                if (settings.TryGetValue("MonitoringKey", out string monKey) && !string.IsNullOrEmpty(monKey))
-                {
-                    uint keyValue = uint.Parse(monKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    monitoringKeyTextBox.Text = ((Keys)keyValue).ToString();
-                    Log($"Set Monitoring key to: {((Keys)keyValue).ToString()}");
-                }
-
-                // Stop Speech hotkey with detailed logging
-                if (settings.TryGetValue("StopSpeechModifier", out string stopMod))
-                {
-                    Log($"[LoadHotkeySettings] Processing StopSpeechModifier: {stopMod}");
-                    uint modValue = uint.Parse(stopMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    string modString = GetModifierString(modValue);
-                    Log($"[LoadHotkeySettings] Converted to modString: {modString}");
-
-                    if (stopSpeechModifierComboBox.Items.Contains(modString))
-                    {
-                        stopSpeechModifierComboBox.SelectedItem = modString;
-                        stopSpeechModifiers = modValue;
-                        Log($"[LoadHotkeySettings] Set Stop Speech modifier to: {modString} (0x{modValue:X2})");
-                    }
-                    else
-                    {
-                        Log($"[LoadHotkeySettings] ModString not found in ComboBox items: {modString}");
-                    }
-                }
-                else
-                {
-                    Log($"[LoadHotkeySettings] StopSpeechModifier not found in settings");
-                }
-
-                if (settings.TryGetValue("StopSpeechKey", out string stopKey))
-                {
-                    Log($"[LoadHotkeySettings] Processing StopSpeechKey: {stopKey}");
-                    uint keyValue = uint.Parse(stopKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    stopSpeechKeyTextBox.Text = ((Keys)keyValue).ToString();
-                    stopSpeechVk = keyValue;
-                    Log($"[LoadHotkeySettings] Set Stop Speech key to: {((Keys)keyValue).ToString()} (0x{keyValue:X2})");
-                }
-                else
-                {
-                    Log($"[LoadHotkeySettings] StopSpeechKey not found in settings");
-                }
-
-                // Change Voice hotkey
-                if (settings.TryGetValue("ChangeVoiceModifier", out string changeMod) && !string.IsNullOrEmpty(changeMod))
-                {
-                    uint modValue = uint.Parse(changeMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    string modString = GetModifierString(modValue);
-                    if (changeVoiceModifierComboBox.Items.Contains(modString))
-                    {
-                        changeVoiceModifierComboBox.SelectedItem = modString;
-                        Log($"Set Change Voice modifier to: {modString}");
-                    }
-                }
-                if (settings.TryGetValue("ChangeVoiceKey", out string changeKey) && !string.IsNullOrEmpty(changeKey))
-                {
-                    uint keyValue = uint.Parse(changeKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    changeVoiceKeyTextBox.Text = ((Keys)keyValue).ToString();
-                    Log($"Set Change Voice key to: {((Keys)keyValue).ToString()}");
-                }
-
-                // Speed Increase hotkey
-                if (settings.TryGetValue("SpeedIncreaseModifier", out string speedIncMod) && !string.IsNullOrEmpty(speedIncMod))
-                {
-                    uint modValue = uint.Parse(speedIncMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    string modString = GetModifierString(modValue);
-                    if (speedIncreaseModifierComboBox.Items.Contains(modString))
-                    {
-                        speedIncreaseModifierComboBox.SelectedItem = modString;
-                        Log($"Set Speed Increase modifier to: {modString}");
-                    }
-                }
-                if (settings.TryGetValue("SpeedIncreaseKey", out string speedIncKey) && !string.IsNullOrEmpty(speedIncKey))
-                {
-                    uint keyValue = uint.Parse(speedIncKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    speedIncreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
-                    Log($"Set Speed Increase key to: {((Keys)keyValue).ToString()}");
-                }
-
-                // Speed Decrease hotkey
-                if (settings.TryGetValue("SpeedDecreaseModifier", out string speedDecMod) && !string.IsNullOrEmpty(speedDecMod))
-                {
-                    uint modValue = uint.Parse(speedDecMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    string modString = GetModifierString(modValue);
-                    if (speedDecreaseModifierComboBox.Items.Contains(modString))
-                    {
-                        speedDecreaseModifierComboBox.SelectedItem = modString;
-                        Log($"Set Speed Decrease modifier to: {modString}");
-                    }
-                }
-                if (settings.TryGetValue("SpeedDecreaseKey", out string speedDecKey) && !string.IsNullOrEmpty(speedDecKey))
-                {
-                    uint keyValue = uint.Parse(speedDecKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-                    speedDecreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
-                    Log($"Set Speed Decrease key to: {((Keys)keyValue).ToString()}");
-                }
+                LoadSwitchPresetHotkey(settings);
+                LoadMonitoringHotkey(settings);
+                LoadStopSpeechHotkey(settings);
+                LoadChangeVoiceHotkey(settings);
+                LoadSpeedHotkeys(settings);
             }
             catch (Exception ex)
             {
                 Log($"Error in LoadHotkeySettings: {ex.Message}");
+            }
+        }
+
+        private void LogInitialState(Dictionary<string, string> settings)
+        {
+            Log($"[LoadHotkeySettings] Starting to load hotkey settings");
+            foreach (var setting in settings)
+            {
+                Log($"[LoadHotkeySettings] Found setting: {setting.Key}={setting.Value}");
+            }
+
+            Log($"[LoadHotkeySettings] Control states:");
+            Log($"MonitoringModifierComboBox initialized: {monitoringModifierComboBox?.IsHandleCreated}, Items: {monitoringModifierComboBox?.Items.Count}");
+            Log($"StopSpeechModifierComboBox initialized: {stopSpeechModifierComboBox?.IsHandleCreated}, Items: {stopSpeechModifierComboBox?.Items.Count}");
+            Log($"ChangeVoiceModifierComboBox initialized: {changeVoiceModifierComboBox?.IsHandleCreated}, Items: {changeVoiceModifierComboBox?.Items.Count}");
+            Log($"SpeedIncreaseModifierComboBox initialized: {speedIncreaseModifierComboBox?.IsHandleCreated}, Items: {speedIncreaseModifierComboBox?.Items.Count}");
+            Log($"SpeedDecreaseModifierComboBox initialized: {speedDecreaseModifierComboBox?.IsHandleCreated}, Items: {speedDecreaseModifierComboBox?.Items.Count}");
+        }
+
+        private void LoadSwitchPresetHotkey(Dictionary<string, string> settings)
+        {
+            // Switch Preset Modifier
+            if (settings.TryGetValue("SwitchPresetModifier", out string spMod) && !string.IsNullOrEmpty(spMod))
+            {
+                uint modValue = uint.Parse(spMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                Log($"[LoadSwitchPresetHotkey] Modifier value: 0x{modValue:X2}, ModString: {modString}");
+
+                if (switchPresetModifierComboBox.Items.Contains(modString))
+                {
+                    switchPresetModifierComboBox.SelectedItem = modString;
+                    Log($"[LoadSwitchPresetHotkey] Set ComboBox SelectedItem to: {modString}");
+                }
+                else
+                {
+                    Log($"[LoadSwitchPresetHotkey] ComboBox does not contain item: {modString}");
+                }
+
+                switchPresetModifiers = modValue; // Assign to variable
+                Log($"[LoadSwitchPresetHotkey] Set switchPresetModifiers to: 0x{modValue:X2}");
+            }
+            else
+            {
+                Log($"[LoadSwitchPresetHotkey] SwitchPresetModifier not found in settings or is empty");
+            }
+
+            // Switch Preset Key
+            if (settings.TryGetValue("SwitchPresetKey", out string spKey) && !string.IsNullOrEmpty(spKey))
+            {
+                uint keyValue = uint.Parse(spKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string keyString = ((Keys)keyValue).ToString();
+                Log($"[LoadSwitchPresetHotkey] Key value: 0x{keyValue:X2}, KeyString: {keyString}");
+
+                switchPresetKeyTextBox.Text = keyString;
+                Log($"[LoadSwitchPresetHotkey] Set TextBox Text to: {keyString}");
+
+                switchPresetVk = keyValue; // Assign to variable
+                Log($"[LoadSwitchPresetHotkey] Set switchPresetVk to: 0x{keyValue:X2}");
+            }
+            else
+            {
+                Log($"[LoadSwitchPresetHotkey] SwitchPresetKey not found in settings or is empty");
+            }
+        }
+
+        private void LoadMonitoringHotkey(Dictionary<string, string> settings)
+        {
+            // Monitoring Modifier
+            if (settings.TryGetValue("MonitoringModifier", out string monMod) && !string.IsNullOrEmpty(monMod))
+            {
+                uint modValue = uint.Parse(monMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (monitoringModifierComboBox.Items.Contains(modString))
+                {
+                    monitoringModifierComboBox.SelectedItem = modString;
+                }
+                monitoringModifiers = modValue; // Assign to variable
+                Log($"Set Monitoring modifier to: {modString} (0x{modValue:X2})");
+            }
+
+            // Monitoring Key
+            if (settings.TryGetValue("MonitoringKey", out string monKey) && !string.IsNullOrEmpty(monKey))
+            {
+                uint keyValue = uint.Parse(monKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                monitoringKeyTextBox.Text = ((Keys)keyValue).ToString();
+                monitoringVk = keyValue; // Assign to variable
+                Log($"Set Monitoring key to: {((Keys)keyValue).ToString()}");
+            }
+        }
+
+        private void LoadStopSpeechHotkey(Dictionary<string, string> settings)
+        {
+            // Stop Speech Modifier
+            if (settings.TryGetValue("StopSpeechModifier", out string ssMod) && !string.IsNullOrEmpty(ssMod))
+            {
+                uint modValue = uint.Parse(ssMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (stopSpeechModifierComboBox.Items.Contains(modString))
+                {
+                    stopSpeechModifierComboBox.SelectedItem = modString;
+                }
+                stopSpeechModifiers = modValue; // Assign to variable
+                Log($"Set Stop Speech modifier to: {modString} (0x{modValue:X2})");
+            }
+
+            // Stop Speech Key
+            if (settings.TryGetValue("StopSpeechKey", out string ssKey) && !string.IsNullOrEmpty(ssKey))
+            {
+                uint keyValue = uint.Parse(ssKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                stopSpeechKeyTextBox.Text = ((Keys)keyValue).ToString();
+                stopSpeechVk = keyValue; // Assign to variable
+                Log($"Set Stop Speech key to: {((Keys)keyValue).ToString()}");
+            }
+        }
+
+        private void LoadChangeVoiceHotkey(Dictionary<string, string> settings)
+        {
+            // Change Voice Modifier
+            if (settings.TryGetValue("ChangeVoiceModifier", out string cvMod) && !string.IsNullOrEmpty(cvMod))
+            {
+                uint modValue = uint.Parse(cvMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (changeVoiceModifierComboBox.Items.Contains(modString))
+                {
+                    changeVoiceModifierComboBox.SelectedItem = modString;
+                }
+                changeVoiceModifiers = modValue; // Assign to variable
+                Log($"Set Change Voice modifier to: {modString} (0x{modValue:X2})");
+            }
+
+            // Change Voice Key
+            if (settings.TryGetValue("ChangeVoiceKey", out string cvKey) && !string.IsNullOrEmpty(cvKey))
+            {
+                uint keyValue = uint.Parse(cvKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                changeVoiceKeyTextBox.Text = ((Keys)keyValue).ToString();
+                changeVoiceVk = keyValue; // Assign to variable
+                Log($"Set Change Voice key to: {((Keys)keyValue).ToString()}");
+            }
+        }
+
+        private void LoadSpeedHotkeys(Dictionary<string, string> settings)
+        {
+            // Speed Increase Modifier
+            if (settings.TryGetValue("SpeedIncreaseModifier", out string siMod) && !string.IsNullOrEmpty(siMod))
+            {
+                uint modValue = uint.Parse(siMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (speedIncreaseModifierComboBox.Items.Contains(modString))
+                {
+                    speedIncreaseModifierComboBox.SelectedItem = modString;
+                }
+                speedIncreaseModifiers = modValue; // Assign to variable
+                Log($"Set Speed Increase modifier to: {modString} (0x{modValue:X2})");
+            }
+
+            // Speed Increase Key
+            if (settings.TryGetValue("SpeedIncreaseKey", out string siKey) && !string.IsNullOrEmpty(siKey))
+            {
+                uint keyValue = uint.Parse(siKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                speedIncreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
+                speedIncreaseVk = keyValue; // Assign to variable
+                Log($"Set Speed Increase key to: {((Keys)keyValue).ToString()}");
+            }
+
+            // Speed Decrease Modifier
+            if (settings.TryGetValue("SpeedDecreaseModifier", out string sdMod) && !string.IsNullOrEmpty(sdMod))
+            {
+                uint modValue = uint.Parse(sdMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (speedDecreaseModifierComboBox.Items.Contains(modString))
+                {
+                    speedDecreaseModifierComboBox.SelectedItem = modString;
+                }
+                speedDecreaseModifiers = modValue; // Assign to variable
+                Log($"Set Speed Decrease modifier to: {modString} (0x{modValue:X2})");
+            }
+
+            // Speed Decrease Key
+            if (settings.TryGetValue("SpeedDecreaseKey", out string sdKey) && !string.IsNullOrEmpty(sdKey))
+            {
+                uint keyValue = uint.Parse(sdKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                speedDecreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
+                speedDecreaseVk = keyValue; // Assign to variable
+                Log($"Set Speed Decrease key to: {((Keys)keyValue).ToString()}");
+            }
+        }
+
+        private void LoadSpeedIncreaseHotkey(Dictionary<string, string> settings)
+        {
+            if (settings.TryGetValue("SpeedIncreaseModifier", out string speedIncMod) && !string.IsNullOrEmpty(speedIncMod))
+            {
+                uint modValue = uint.Parse(speedIncMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (speedIncreaseModifierComboBox.Items.Contains(modString))
+                {
+                    speedIncreaseModifierComboBox.SelectedItem = modString;
+                    Log($"Set Speed Increase modifier to: {modString}");
+                }
+            }
+
+            if (settings.TryGetValue("SpeedIncreaseKey", out string speedIncKey) && !string.IsNullOrEmpty(speedIncKey))
+            {
+                uint keyValue = uint.Parse(speedIncKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                speedIncreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
+                Log($"Set Speed Increase key to: {((Keys)keyValue).ToString()}");
+            }
+        }
+
+        private void LoadSpeedDecreaseHotkey(Dictionary<string, string> settings)
+        {
+            if (settings.TryGetValue("SpeedDecreaseModifier", out string speedDecMod) && !string.IsNullOrEmpty(speedDecMod))
+            {
+                uint modValue = uint.Parse(speedDecMod.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                string modString = GetModifierString(modValue);
+                if (speedDecreaseModifierComboBox.Items.Contains(modString))
+                {
+                    speedDecreaseModifierComboBox.SelectedItem = modString;
+                    Log($"Set Speed Decrease modifier to: {modString}");
+                }
+            }
+
+            if (settings.TryGetValue("SpeedDecreaseKey", out string speedDecKey) && !string.IsNullOrEmpty(speedDecKey))
+            {
+                uint keyValue = uint.Parse(speedDecKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                speedDecreaseKeyTextBox.Text = ((Keys)keyValue).ToString();
+                Log($"Set Speed Decrease key to: {((Keys)keyValue).ToString()}");
             }
         }
 
@@ -1447,13 +2240,15 @@ namespace PiperTray
             Log($"Set hotkey modifier: {modifierString}");
         }
 
-        private string GetModifierString(uint modifier)
+        private string GetModifierString(uint modifierValue)
         {
-            if (modifier == 0) return "NONE";
-            if (modifier == 1) return "ALT";
-            if (modifier == 2) return "CTRL";
-            if (modifier == 4) return "SHIFT";
-            return "NONE";
+            switch (modifierValue)
+            {
+                case 0x0001: return "ALT";
+                case 0x0002: return "CTRL";
+                case 0x0004: return "SHIFT";
+                default: return "ALT";  // Default to ALT as a safe fallback
+            }
         }
 
         private void CheckAndRegisterHotkey(string hotkeyName, ComboBox modifierComboBox, TextBox keyTextBox)
@@ -1580,34 +2375,55 @@ namespace PiperTray
         }
 
         private void SaveSettings(
-            uint monitoringModifiers,
-            uint monitoringVk,
-            uint stopSpeechModifiers,
-            uint stopSpeechVk,
-            uint changeVoiceModifiers,
-            uint changeVoiceVk,
-            uint speedIncreaseModifiers,
-            uint speedIncreaseVk,
-            uint speedDecreaseModifiers,
-            uint speedDecreaseVk)
+    uint monitoringModifiers,
+    uint monitoringVk,
+    uint stopSpeechModifiers,
+    uint stopSpeechVk,
+    uint changeVoiceModifiers,
+    uint changeVoiceVk,
+    uint speedIncreaseModifiers,
+    uint speedIncreaseVk,
+    uint speedDecreaseModifiers,
+    uint speedDecreaseVk,
+    uint switchPresetModifiers,
+    uint switchPresetVk,
+    float sentenceSilence)
         {
             var app = PiperTrayApp.GetInstance();
-            var lines = File.Exists(app.GetConfigPath()) ?
-                File.ReadAllLines(app.GetConfigPath()).ToList() :
-                new List<string>();
+            string configPath = app.GetConfigPath();
 
-            UpdateOrAddSetting(lines, "MonitoringModifier", $"0x{monitoringModifiers:X2}");
-            UpdateOrAddSetting(lines, "MonitoringKey", $"0x{monitoringVk:X2}");
-            UpdateOrAddSetting(lines, "StopSpeechModifier", $"0x{stopSpeechModifiers:X2}");
-            UpdateOrAddSetting(lines, "StopSpeechKey", $"0x{stopSpeechVk:X2}");
-            UpdateOrAddSetting(lines, "ChangeVoiceModifier", $"0x{changeVoiceModifiers:X2}");
-            UpdateOrAddSetting(lines, "ChangeVoiceKey", $"0x{changeVoiceVk:X2}");
-            UpdateOrAddSetting(lines, "SpeedIncreaseModifier", $"0x{speedIncreaseModifiers:X2}");
-            UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
-            UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
-            UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
+            // Read all existing settings into a dictionary to preserve them
+            var settingsDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (File.Exists(configPath))
+            {
+                var lines = File.ReadAllLines(configPath);
+                settingsDict = lines
+                    .Where(line => !string.IsNullOrWhiteSpace(line) && line.Contains('='))
+                    .Select(line => line.Split(new[] { '=' }, 2))
+                    .ToDictionary(parts => parts[0].Trim(), parts => parts[1].Trim(), StringComparer.OrdinalIgnoreCase);
+            }
 
-            File.WriteAllLines(app.GetConfigPath(), lines);
+            // Update settings with the new values
+            settingsDict["MonitoringModifier"] = $"0x{monitoringModifiers:X2}";
+            settingsDict["MonitoringKey"] = $"0x{monitoringVk:X2}";
+            settingsDict["StopSpeechModifier"] = $"0x{stopSpeechModifiers:X2}";
+            settingsDict["StopSpeechKey"] = $"0x{stopSpeechVk:X2}";
+            settingsDict["ChangeVoiceModifier"] = $"0x{changeVoiceModifiers:X2}";
+            settingsDict["ChangeVoiceKey"] = $"0x{changeVoiceVk:X2}";
+            settingsDict["SpeedIncreaseModifier"] = $"0x{speedIncreaseModifiers:X2}";
+            settingsDict["SpeedIncreaseKey"] = $"0x{speedIncreaseVk:X2}";
+            settingsDict["SpeedDecreaseModifier"] = $"0x{speedDecreaseModifiers:X2}";
+            settingsDict["SpeedDecreaseKey"] = $"0x{speedDecreaseVk:X2}";
+            settingsDict["SwitchPresetModifier"] = $"0x{switchPresetModifiers:X2}";
+            settingsDict["SwitchPresetKey"] = $"0x{switchPresetVk:X2}";
+            settingsDict["SentenceSilence"] = sentenceSilence.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+
+            // Reconstruct the lines from the updated settings dictionary
+            var linesToWrite = settingsDict.Select(kvp => $"{kvp.Key}={kvp.Value}").ToList();
+
+            // Write all settings back to the config file, preserving existing settings
+            File.WriteAllLines(configPath, linesToWrite);
+            Log($"[SaveSettings] Settings saved successfully");
         }
 
         private int GetHotkeyId(string hotkeyName)
@@ -1638,13 +2454,18 @@ namespace PiperTray
 
         private uint GetModifierVirtualKeyCode(string modifier)
         {
-            switch (modifier)
+            Log($"[GetModifierVirtualKeyCode] Processing modifier: {modifier}");
+
+            switch (modifier.ToUpper())
             {
-                case "ALT": return 0x0001; // MOD_ALT
-                case "CTRL": return 0x0002; // MOD_CONTROL
-                case "SHIFT": return 0x0004; // MOD_SHIFT
-                case "WIN": return 0x0008; // MOD_WIN
-                default: return 0x0000;
+                case "ALT":
+                    return 0x01;
+                case "CTRL":
+                    return 0x02;
+                case "SHIFT":
+                    return 0x04;
+                default:
+                    return 0x01; // Default to ALT as a safe fallback
             }
         }
 
@@ -1705,127 +2526,440 @@ namespace PiperTray
 
         private void UpdateOrAddSetting(List<string> lines, string key, string value)
         {
-            // Log the incoming values for debugging
-            Log($"[UpdateOrAddSetting] Updating {key} with value {value}");
+            Log($"[UpdateOrAddSetting] ===== Starting Update Operation =====");
+            Log($"[UpdateOrAddSetting] Key: {key}");
+            Log($"[UpdateOrAddSetting] Value: {value}");
+            Log($"[UpdateOrAddSetting] Initial line count: {lines.Count}");
 
-            int index = lines.FindIndex(l => l.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase));
-
-            // Ensure hotkey values are properly formatted
-            if (key.EndsWith("Modifier") || key.EndsWith("Key"))
+            // Dump current state of all relevant settings
+            Log($"[UpdateOrAddSetting] Current settings state:");
+            foreach (var line in lines)
             {
-                value = value.StartsWith("0x") ? value : $"0x{value}";
+                if (line.Contains("SwitchPreset") || line.Contains("Speed") ||
+                    line.Contains("Voice") || line.Contains("Monitoring"))
+                {
+                    Log($"[UpdateOrAddSetting] Current line: {line}");
+                }
             }
 
-            if (index != -1)
+            // Find and update/add setting with detailed tracking
+            int index = lines.FindIndex(l => l.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase));
+            Log($"[UpdateOrAddSetting] Search result - Found at index: {index}");
+
+            string newLine = $"{key}={value}";
+            if (index >= 0)
             {
-                lines[index] = $"{key}={value}";
-                Log($"[UpdateOrAddSetting] Updated setting '{key}' to '{value}' at line {index + 1}");
+                Log($"[UpdateOrAddSetting] Updating existing line:");
+                Log($"[UpdateOrAddSetting] Old: {lines[index]}");
+                lines[index] = newLine;
+                Log($"[UpdateOrAddSetting] New: {lines[index]}");
             }
             else
             {
-                lines.Add($"{key}={value}");
-                Log($"[UpdateOrAddSetting] Added new setting '{key}' with value '{value}'");
+                Log($"[UpdateOrAddSetting] Adding new line: {newLine}");
+                lines.Add(newLine);
+                index = lines.Count - 1;
+                Log($"[UpdateOrAddSetting] Added at index: {index}");
             }
+
+            // Verify final state
+            Log($"[UpdateOrAddSetting] ===== Final State =====");
+            Log($"[UpdateOrAddSetting] Final line count: {lines.Count}");
+            var finalLine = lines.FirstOrDefault(l => l.StartsWith(key + "="));
+            Log($"[UpdateOrAddSetting] Final setting: {finalLine}");
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
         {
-            Log($"[SaveButton_Click] Entering method");
+            Log($"[SaveButton_Click] ===== Starting Save Operation =====");
+            var app = PiperTrayApp.GetInstance();
+            string configPath = app.GetConfigPath();
+            Log($"[SaveButton_Click] Config path: {configPath}");
+
+            if (!VerifyPresetControls())
+            {
+                Log("[SaveButton_Click] Preset controls not properly initialized. Reinitializing...");
+                InitializePresetArrays();
+                for (int i = 0; i < 4; i++)
+                {
+                    CreatePresetPanel(i);
+                }
+                LoadSavedPresets();
+
+                if (!VerifyPresetControls())
+                {
+                    Log("[SaveButton_Click] Control initialization failed. Aborting save.");
+                    MessageBox.Show("Unable to save settings due to initialization error.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+
+            var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+            Log($"[SaveButton_Click] Loaded {lines.Count} existing config lines");
 
             try
             {
-                // Save presets
+                // Log preset control states
                 for (int i = 0; i < 4; i++)
                 {
-                    string selectedValue = presetSpeedComboBoxes[i].SelectedItem?.ToString();
-                    int speedIndex = int.Parse(selectedValue); // Gets the actual -9 to 10 value
-                    double speed = GetSpeedValue(speedIndex);
-                    int speaker = int.Parse(presetSpeakerComboBoxes[i].SelectedItem?.ToString() ?? "0");
-
-                    var preset = new PiperTrayApp.PresetSettings
-                    {
-                        Name = presetNameTextBoxes[i].Text,
-                        VoiceModel = presetVoiceModelComboBoxes[i].SelectedItem?.ToString(),
-                        Speaker = speaker,
-                        Speed = speed,
-                        SentenceSilence = (float)presetSilenceNumericUpDowns[i].Value,
-                        Enabled = presetEnableCheckBoxes[i].Checked
-                    };
-
-                    PiperTrayApp.GetInstance().SavePreset(i, preset);
-
-                    if (i == currentPresetIndex)
-                    {
-                        PiperTrayApp.GetInstance().SaveSettings(
-                            sentenceSilence: (float)presetSilenceNumericUpDowns[i].Value,
-                            speaker: speaker
-                        );
-                    }
+                    Log($"[SaveButton_Click] Preset {i + 1} control states:");
+                    Log($"  Name TextBox: {presetNameTextBoxes[i]?.Text}");
+                    Log($"  Voice Model: {presetVoiceModelComboBoxes[i]?.SelectedItem}");
+                    Log($"  Speaker: {presetSpeakerComboBoxes[i]?.SelectedItem}");
+                    Log($"  Speed: {presetSpeedComboBoxes[i]?.SelectedItem}");
+                    Log($"  Silence: {presetSilenceNumericUpDowns[i]?.Value}");
+                    Log($"  Enabled: {presetEnableCheckBoxes[i]?.Checked}");
                 }
 
-                // Get all current hotkey values
-                uint monitoringModifiers = monitoringModifierComboBox?.SelectedItem != null ?
-                    GetModifierVirtualKeyCode(monitoringModifierComboBox.SelectedItem.ToString()) : 0;
-                uint monitoringVk = !string.IsNullOrEmpty(monitoringKeyTextBox?.Text) ?
-                    GetVirtualKeyCode(monitoringKeyTextBox.Text) : 0;
+                SavePresets(lines);
+                SaveHotkeys(lines);
 
-                uint stopSpeechModifiers = stopSpeechModifierComboBox?.SelectedItem != null ?
-                    GetModifierVirtualKeyCode(stopSpeechModifierComboBox.SelectedItem.ToString()) : 0;
-                uint stopSpeechVk = !string.IsNullOrEmpty(stopSpeechKeyTextBox?.Text) ?
-                    GetVirtualKeyCode(stopSpeechKeyTextBox.Text) : 0;
+                // Log final state and write to file
+                Log($"[SaveButton_Click] Final config line count: {lines.Count}");
+                File.WriteAllLines(configPath, lines);
+                Log($"[SaveButton_Click] Settings saved successfully");
 
-                Log($"[SaveButton_Click] Stop Speech values - Modifier: 0x{stopSpeechModifiers:X2}, Key: 0x{stopSpeechVk:X2}");
-
-                uint changeVoiceModifiers = changeVoiceModifierComboBox?.SelectedItem != null ?
-                    GetModifierVirtualKeyCode(changeVoiceModifierComboBox.SelectedItem.ToString()) : 0;
-                uint changeVoiceVk = !string.IsNullOrEmpty(changeVoiceKeyTextBox?.Text) ?
-                    GetVirtualKeyCode(changeVoiceKeyTextBox.Text) : 0;
-
-                uint speedIncreaseModifiers = speedIncreaseModifierComboBox?.SelectedItem != null ?
-                    GetModifierVirtualKeyCode(speedIncreaseModifierComboBox.SelectedItem.ToString()) : 0;
-                uint speedIncreaseVk = !string.IsNullOrEmpty(speedIncreaseKeyTextBox?.Text) ?
-                    GetVirtualKeyCode(speedIncreaseKeyTextBox.Text) : 0;
-
-                uint speedDecreaseModifiers = speedDecreaseModifierComboBox?.SelectedItem != null ?
-                    GetModifierVirtualKeyCode(speedDecreaseModifierComboBox.SelectedItem.ToString()) : 0;
-                uint speedDecreaseVk = !string.IsNullOrEmpty(speedDecreaseKeyTextBox?.Text) ?
-                    GetVirtualKeyCode(speedDecreaseKeyTextBox.Text) : 0;
-
-                // Save all settings including hotkeys
-                SaveSettings(
-                    monitoringModifiers,
-                    monitoringVk,
-                    this.stopSpeechModifiers,
-                    this.stopSpeechVk,
-                    changeVoiceModifiers,
-                    changeVoiceVk,
-                    speedIncreaseModifiers,
-                    speedIncreaseVk,
-                    speedDecreaseModifiers,
-                    speedDecreaseVk
-                );
-
-                // Register the new hotkeys
-                RegisterHotkeys();
-
-                var app = PiperTrayApp.GetInstance();
-                var settings = app.ReadCurrentSettings();
-                if (settings.TryGetValue("Speed", out string speedValue) &&
-                    double.TryParse(speedValue, out double currentSpeed))
-                {
-                    app.UpdateSpeedFromSettings(currentSpeed);
-                }
+                // Register hotkeys and update application state
+                app.RegisterHotkeys();
+                Log($"[SaveButton_Click] Hotkeys re-registered");
 
                 this.DialogResult = DialogResult.OK;
                 this.Close();
-
-                Log($"[SaveButton_Click] Settings saved successfully");
             }
             catch (Exception ex)
             {
-                Log($"[SaveButton_Click] Error saving settings: {ex.Message}");
+                Log($"[SaveButton_Click] Error during save operation:");
+                Log($"  Exception Type: {ex.GetType().Name}");
+                Log($"  Message: {ex.Message}");
+                Log($"  Stack Trace: {ex.StackTrace}");
                 MessageBox.Show($"An error occurred while saving settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+
+            Log($"[SaveButton_Click] ===== Save Operation Complete =====");
+        }
+
+        private void SavePresets(List<string> lines)
+        {
+            Log($"[SavePresets] ===== Starting Preset Save Operation =====");
+
+            for (int i = 0; i < 4; i++)
+            {
+                Log($"[SavePresets] Processing preset {i + 1}");
+                try
+                {
+                    // Validate controls
+                    if (!ValidatePresetControls(i))
+                    {
+                        Log($"[SavePresets] Preset {i + 1} controls validation failed");
+                        continue;
+                    }
+
+                    // Log control values
+                    Log($"[SavePresets] Preset {i + 1} values:");
+                    Log($"  Name: {presetNameTextBoxes[i].Text}");
+                    Log($"  Voice Model: {presetVoiceModelComboBoxes[i].SelectedItem}");
+                    Log($"  Speaker: {presetSpeakerComboBoxes[i].SelectedItem}");
+                    Log($"  Speed Index: {presetSpeedComboBoxes[i].SelectedIndex}");
+                    Log($"  Silence Value: {presetSilenceNumericUpDowns[i].Value}");
+                    Log($"  Enabled: {presetEnableCheckBoxes[i].Checked}");
+
+                    var preset = new PiperTrayApp.PresetSettings
+                    {
+                        Name = presetNameTextBoxes[i].Text ?? $"Preset {i + 1}",
+                        VoiceModel = presetVoiceModelComboBoxes[i].SelectedItem.ToString(),
+                        Speaker = presetSpeakerComboBoxes[i].SelectedItem.ToString(),
+                        Speed = GetSpeedValue(presetSpeedComboBoxes[i].SelectedIndex - 9).ToString(CultureInfo.InvariantCulture),
+                        SentenceSilence = presetSilenceNumericUpDowns[i].Value.ToString(CultureInfo.InvariantCulture),
+                        Enabled = presetEnableCheckBoxes[i].Checked.ToString()
+                    };
+
+                    string presetJson = JsonSerializer.Serialize(preset);
+                    Log($"[SavePresets] Serialized preset {i + 1}: {presetJson}");
+
+                    UpdateOrAddSetting(lines, $"Preset{i + 1}", presetJson);
+                    Log($"[SavePresets] Successfully saved preset {i + 1}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"[SavePresets] Error saving preset {i + 1}:");
+                    Log($"  Exception Type: {ex.GetType().Name}");
+                    Log($"  Message: {ex.Message}");
+                    Log($"  Stack Trace: {ex.StackTrace}");
+                }
+            }
+            Log($"[SavePresets] ===== Preset Save Operation Complete =====");
+        }
+
+        private bool ArePresetControlsValid(int index)
+        {
+            var controls = new Control[]
+            {
+                presetNameTextBoxes[index],
+                presetVoiceModelComboBoxes[index],
+                presetSpeakerComboBoxes[index],
+                presetSpeedComboBoxes[index],
+                presetSilenceNumericUpDowns[index],
+                presetEnableCheckBoxes[index]
+            };
+
+            bool valid = controls.All(c => c != null && c.Created);
+            Log($"[ArePresetControlsValid] Preset {index + 1} controls valid: {valid}");
+
+            if (!valid)
+            {
+                var nullControls = controls
+                    .Select((c, i) => new { Control = c, Index = i })
+                    .Where(x => x.Control == null || !x.Control.Created)
+                    .Select(x => x.Index)
+                    .ToList();
+
+                Log($"[ArePresetControlsValid] Invalid controls at indices: {string.Join(", ", nullControls)}");
+            }
+
+            return valid;
+        }
+
+        private bool ValidatePresetControls(int index)
+        {
+            if (presetNameTextBoxes[index]?.IsHandleCreated != true ||
+                presetVoiceModelComboBoxes[index]?.IsHandleCreated != true ||
+                presetSpeakerComboBoxes[index]?.IsHandleCreated != true ||
+                presetSpeedComboBoxes[index]?.IsHandleCreated != true ||
+                presetSilenceNumericUpDowns[index]?.IsHandleCreated != true ||
+                presetEnableCheckBoxes[index]?.IsHandleCreated != true)
+            {
+                Log($"[ValidatePresetControls] One or more controls not properly initialized for preset {index + 1}");
+                return false;
+            }
+
+            if (presetVoiceModelComboBoxes[index].SelectedItem == null ||
+                presetSpeakerComboBoxes[index].SelectedItem == null)
+            {
+                Log($"[ValidatePresetControls] Required selections missing for preset {index + 1}");
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ValidateSpeakerValue(string modelName, string speakerValue)
+        {
+            if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(speakerValue))
+            {
+                return false;
+            }
+
+            string jsonPath = Path.Combine(
+                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                $"{modelName}.onnx.json"
+            );
+
+            try
+            {
+                if (File.Exists(jsonPath))
+                {
+                    string jsonContent = File.ReadAllText(jsonPath);
+                    using JsonDocument doc = JsonDocument.Parse(jsonContent);
+                    if (doc.RootElement.TryGetProperty("num_speakers", out JsonElement numSpeakers))
+                    {
+                        int maxSpeakers = numSpeakers.GetInt32();
+                        if (int.TryParse(speakerValue, out int speakerIndex))
+                        {
+                            return speakerIndex >= 0 && speakerIndex < maxSpeakers;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[ValidateSpeakerValue] Error validating speaker value: {ex.Message}");
+            }
+            return false;
+        }
+
+        private void SaveHotkeys(List<string> lines)
+        {
+            Log($"[SaveHotkeys] ===== Starting Hotkey Processing =====");
+
+            // Parse existing settings into a dictionary
+            var existingSettings = lines
+                .Where(line => !string.IsNullOrWhiteSpace(line) && line.Contains('='))
+                .Select(line => line.Split(new[] { '=' }, 2))
+                .ToDictionary(parts => parts[0].Trim(), parts => parts[1].Trim(), StringComparer.OrdinalIgnoreCase);
+
+            // Get Switch Preset values with verification
+            string hotkeyName = "Switch Preset";
+            bool isEnabled = hotkeyEnableCheckboxes.TryGetValue($"{hotkeyName}:", out CheckBox enableCheckBox) && enableCheckBox.Checked;
+
+            if (isEnabled)
+            {
+                string selectedModifier = switchPresetModifierComboBox?.SelectedItem?.ToString();
+                string selectedKey = switchPresetKeyTextBox?.Text;
+                Log($"[SaveHotkeys] {hotkeyName} UI values - Modifier: '{selectedModifier}', Key: '{selectedKey}'");
+
+                // Check if key or modifier is empty
+                if (string.IsNullOrEmpty(selectedKey) || string.IsNullOrEmpty(selectedModifier))
+                {
+                    // Try to get existing values from settings
+                    if (existingSettings.TryGetValue("SwitchPresetModifier", out string existingModifier) &&
+                        existingSettings.TryGetValue("SwitchPresetKey", out string existingKey))
+                    {
+                        // Use existing values
+                        selectedModifier = GetModifierString(uint.Parse(existingModifier.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber));
+                        selectedKey = ((Keys)uint.Parse(existingKey.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber)).ToString();
+                        Log($"[SaveHotkeys] Using existing values - Modifier: '{selectedModifier}', Key: '{selectedKey}'");
+                    }
+                    else
+                    {
+                        // No existing key and modifier; prompt the user or set default
+                        MessageBox.Show("No key and modifier assigned for the 'Switch Preset' hotkey. Please specify them.", "Hotkey Configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        // You can choose to return or set default values here
+                        return; // Exit the method to prevent saving invalid settings
+                    }
+                }
+
+                uint switchPresetModifiers = GetModifierVirtualKeyCode(selectedModifier ?? string.Empty);
+                uint switchPresetVk = GetVirtualKeyCode(selectedKey ?? string.Empty);
+                Log($"[SaveHotkeys] {hotkeyName} converted values - Modifier: 0x{switchPresetModifiers:X2}, VK: 0x{switchPresetVk:X2}");
+
+                string modifierValue = $"0x{switchPresetModifiers:X2}";
+                string keyValue = $"0x{switchPresetVk:X2}";
+                Log($"[SaveHotkeys] Writing {hotkeyName} values - Modifier: {modifierValue}, Key: {keyValue}");
+
+                UpdateOrAddSetting(lines, "SwitchPresetModifier", modifierValue);
+                UpdateOrAddSetting(lines, "SwitchPresetKey", keyValue);
+            }
+            else
+            {
+                Log($"[SaveHotkeys] {hotkeyName} is disabled; skipping key and modifier update");
+            }
+
+            SaveHotkeyEnabledStates(lines);
+
+            // Process other hotkeys
+            ProcessOtherHotkeys(lines);
+
+            Log($"[SaveHotkeys] ===== Final State =====");
+            foreach (var line in lines.Where(l => l.StartsWith("SwitchPreset", StringComparison.OrdinalIgnoreCase)))
+            {
+                Log($"[SaveHotkeys] Final setting: {line}");
+            }
+        }
+
+        private void ProcessOtherHotkeys(List<string> lines)
+        {
+            UpdateOrAddSetting(lines, "MonitoringModifier", $"0x{monitoringModifiers:X2}");
+            UpdateOrAddSetting(lines, "MonitoringKey", $"0x{monitoringVk:X2}");
+            UpdateOrAddSetting(lines, "StopSpeechModifier", $"0x{stopSpeechModifiers:X2}");
+            UpdateOrAddSetting(lines, "StopSpeechKey", $"0x{stopSpeechVk:X2}");
+            UpdateOrAddSetting(lines, "ChangeVoiceModifier", $"0x{changeVoiceModifiers:X2}");
+            UpdateOrAddSetting(lines, "ChangeVoiceKey", $"0x{changeVoiceVk:X2}");
+            UpdateOrAddSetting(lines, "SpeedIncreaseModifier", $"0x{speedIncreaseModifiers:X2}");
+            UpdateOrAddSetting(lines, "SpeedIncreaseKey", $"0x{speedIncreaseVk:X2}");
+            UpdateOrAddSetting(lines, "SpeedDecreaseModifier", $"0x{speedDecreaseModifiers:X2}");
+            UpdateOrAddSetting(lines, "SpeedDecreaseKey", $"0x{speedDecreaseVk:X2}");
+        }
+
+        private void ProcessHotkeyUpdate(List<string> lines, string prefix, uint modifiers, uint vk)
+        {
+            string modifierValue = $"0x{modifiers:X2}";
+            string keyValue = $"0x{vk:X2}";
+
+            Log($"[SaveHotkeys] Processing {prefix} - Modifier: {modifierValue}, Key: {keyValue}");
+
+            UpdateOrAddSetting(lines, $"{prefix}Modifier", modifierValue);
+            UpdateOrAddSetting(lines, $"{prefix}Key", keyValue);
+        }
+
+        private void SaveGlobalSettings(List<string> lines, PiperTrayApp app)
+        {
+            Log($"[SaveGlobalSettings] Updating global settings");
+            var settings = app.ReadCurrentSettings();
+            if (settings.TryGetValue("Speed", out string speedValue) &&
+                double.TryParse(speedValue, out double currentSpeed))
+            {
+                UpdateOrAddSetting(lines, "Speed", currentSpeed.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
+        private void RegisterAndUpdateState(PiperTrayApp app)
+        {
+            Log($"[RegisterAndUpdateState] Registering hotkeys and updating application state");
+            RegisterHotkeys();
+
+            var settings = app.ReadCurrentSettings();
+            if (settings.TryGetValue("Speed", out string speedValue) &&
+                double.TryParse(speedValue, out double currentSpeed))
+            {
+                app.UpdateSpeedFromSettings(currentSpeed);
+            }
+        }
+
+        private void SaveSwitchPresetHotkey(List<string> lines)
+        {
+            string selectedModifier = switchPresetModifierComboBox?.SelectedItem?.ToString();
+            string selectedKey = switchPresetKeyTextBox?.Text;
+            Log($"[SaveSwitchPresetHotkey] Raw UI values - Modifier: '{selectedModifier}', Key: '{selectedKey}'");
+
+            uint switchPresetModifiers = GetModifierVirtualKeyCode(selectedModifier ?? string.Empty);
+            uint switchPresetVk = GetVirtualKeyCode(selectedKey ?? string.Empty);
+            Log($"[SaveSwitchPresetHotkey] Converted values - Modifier: 0x{switchPresetModifiers:X2}, VK: 0x{switchPresetVk:X2}");
+
+            // Force update of settings.conf
+            string configPath = PiperTrayApp.GetInstance().GetConfigPath();
+            var currentLines = File.ReadAllLines(configPath).ToList();
+
+            // Update or add Switch Preset settings
+            int modifierIndex = currentLines.FindIndex(l => l.StartsWith("SwitchPresetModifier="));
+            int keyIndex = currentLines.FindIndex(l => l.StartsWith("SwitchPresetKey="));
+
+            string modifierLine = $"SwitchPresetModifier=0x{switchPresetModifiers:X2}";
+            string keyLine = $"SwitchPresetKey=0x{switchPresetVk:X2}";
+
+            if (modifierIndex >= 0)
+                currentLines[modifierIndex] = modifierLine;
+            else
+                currentLines.Add(modifierLine);
+
+            if (keyIndex >= 0)
+                currentLines[keyIndex] = keyLine;
+            else
+                currentLines.Add(keyLine);
+
+            // Write updated settings
+            File.WriteAllLines(configPath, currentLines);
+
+            // Update application state
+            var app = PiperTrayApp.GetInstance();
+            app.UpdateHotkey(PiperTrayApp.HOTKEY_ID_SWITCH_PRESET, switchPresetModifiers, switchPresetVk);
+        }
+
+        private void SaveStandardHotkeys(List<string> lines)
+        {
+            // Process standard hotkeys (Monitoring, Stop Speech, etc.)
+            ProcessHotkeyPair(lines, "Monitoring", monitoringModifierComboBox, monitoringKeyTextBox);
+            ProcessHotkeyPair(lines, "StopSpeech", stopSpeechModifierComboBox, stopSpeechKeyTextBox);
+            ProcessHotkeyPair(lines, "ChangeVoice", changeVoiceModifierComboBox, changeVoiceKeyTextBox);
+            ProcessHotkeyPair(lines, "SpeedIncrease", speedIncreaseModifierComboBox, speedIncreaseKeyTextBox);
+            ProcessHotkeyPair(lines, "SpeedDecrease", speedDecreaseModifierComboBox, speedDecreaseKeyTextBox);
+        }
+
+        private void ProcessHotkeyPair(List<string> lines, string prefix, ComboBox modifierBox, TextBox keyBox)
+        {
+            uint modifiers = GetModifierVirtualKeyCode(modifierBox?.SelectedItem?.ToString() ?? string.Empty);
+            uint vk = GetVirtualKeyCode(keyBox?.Text ?? string.Empty);
+
+            UpdateOrAddSetting(lines, $"{prefix}Modifier", $"0x{modifiers:X2}");
+            UpdateOrAddSetting(lines, $"{prefix}Key", $"0x{vk:X2}");
+        }
+
+        private void UpdateGlobalPresetSettings(List<string> lines, PiperTrayApp.PresetSettings preset, double speed)
+        {
+            // Convert numeric values to strings using invariant culture
+            UpdateOrAddSetting(lines, "Speed", speed.ToString(CultureInfo.InvariantCulture));
+            UpdateOrAddSetting(lines, "Speaker", preset.Speaker.ToString());
+            UpdateOrAddSetting(lines, "VoiceModel", preset.VoiceModel);
+            UpdateOrAddSetting(lines, "SentenceSilence", preset.SentenceSilence.ToString(CultureInfo.InvariantCulture));
         }
 
         private void RefreshVoiceModels_Click(object sender, EventArgs e)
