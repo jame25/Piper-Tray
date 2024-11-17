@@ -2599,23 +2599,16 @@ namespace PiperTray
 
             try
             {
-                // Log preset control states
-                for (int i = 0; i < 4; i++)
-                {
-                    Log($"[SaveButton_Click] Preset {i + 1} control states:");
-                    Log($"  Name TextBox: {presetNameTextBoxes[i]?.Text}");
-                    Log($"  Voice Model: {presetVoiceModelComboBoxes[i]?.SelectedItem}");
-                    Log($"  Speaker: {presetSpeakerComboBoxes[i]?.SelectedItem}");
-                    Log($"  Speed: {presetSpeedComboBoxes[i]?.SelectedItem}");
-                    Log($"  Silence: {presetSilenceNumericUpDowns[i]?.Value}");
-                    Log($"  Enabled: {presetEnableCheckBoxes[i]?.Checked}");
-                }
-
+                // Save presets
                 SavePresets(lines);
+
+                // Save hotkeys
                 SaveHotkeys(lines);
 
-                // Log final state and write to file
-                Log($"[SaveButton_Click] Final config line count: {lines.Count}");
+                // Add this line to update the main settings from the active preset
+                UpdateMainSettingsFromActivePreset(lines);
+
+                // Write updated settings to file
                 File.WriteAllLines(configPath, lines);
                 Log($"[SaveButton_Click] Settings saved successfully");
 
@@ -2636,6 +2629,41 @@ namespace PiperTray
             }
 
             Log($"[SaveButton_Click] ===== Save Operation Complete =====");
+        }
+
+        // File: Settings.cs
+        private void UpdateMainSettingsFromActivePreset(List<string> lines)
+        {
+            Log("[UpdateMainSettingsFromActivePreset] Updating main settings from active preset");
+
+            if (currentPresetIndex < 0 || currentPresetIndex >= presetNameTextBoxes.Length)
+            {
+                Log("[UpdateMainSettingsFromActivePreset] Invalid currentPresetIndex");
+                return;
+            }
+
+            // Get the values from the active preset
+            string voiceModel = presetVoiceModelComboBoxes[currentPresetIndex]?.SelectedItem?.ToString();
+            string speaker = presetSpeakerComboBoxes[currentPresetIndex]?.SelectedItem?.ToString();
+
+            // Handle nullable SelectedIndex for speed
+            int selectedIndex = presetSpeedComboBoxes[currentPresetIndex]?.SelectedIndex ?? -1; // Default to -1 if null
+            int adjustedIndex = selectedIndex - 9;
+
+            // Get the speed value
+            double speedValue = GetSpeedValue(adjustedIndex);
+            string speed = speedValue.ToString(CultureInfo.InvariantCulture);
+
+            // Get the sentence silence value
+            string sentenceSilence = presetSilenceNumericUpDowns[currentPresetIndex]?.Value.ToString(CultureInfo.InvariantCulture);
+
+            // Update or add the main settings
+            UpdateOrAddSetting(lines, "VoiceModel", voiceModel);
+            UpdateOrAddSetting(lines, "Speaker", speaker);
+            UpdateOrAddSetting(lines, "Speed", speed);
+            UpdateOrAddSetting(lines, "SentenceSilence", sentenceSilence);
+
+            Log("[UpdateMainSettingsFromActivePreset] Main settings updated");
         }
 
         private void SavePresets(List<string> lines)
