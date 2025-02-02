@@ -393,25 +393,32 @@ namespace PiperTray
             }
 
             // Parse and apply the preset settings
-            if (double.TryParse(preset.Speed, NumberStyles.Float, CultureInfo.InvariantCulture, out double speed))
+            double speed = 0;
+            if (double.TryParse(preset.Speed, NumberStyles.Float, CultureInfo.InvariantCulture, out speed))
             {
+                Log($"[ApplyPreset] Parsed preset speed: {speed}");
                 PiperTrayApp.GetInstance().SaveSettings(speed: speed);
             }
 
-            if (int.TryParse(preset.Speaker, out int speaker))
+            int speaker = 0; // Default speaker ID
+            if (int.TryParse(preset.Speaker, out int spk))
             {
+                speaker = spk;
                 PiperTrayApp.GetInstance().UpdateCurrentSpeaker(speaker);
             }
 
-            if (!string.IsNullOrEmpty(preset.VoiceModel))
+            float silence = 0.5f; // Default value
+            if (float.TryParse(preset.SentenceSilence, NumberStyles.Float, CultureInfo.InvariantCulture, out float s))
             {
-                PiperTrayApp.GetInstance().SaveSettings(voiceModel: preset.VoiceModel);
+                silence = s;
             }
 
-            if (float.TryParse(preset.SentenceSilence, NumberStyles.Float, CultureInfo.InvariantCulture, out float silence))
-            {
-                PiperTrayApp.GetInstance().SaveSettings(sentenceSilence: silence);
-            }
+            // Save all settings at once to prevent overwrites
+            PiperTrayApp.GetInstance().SaveSettings(
+                voiceModel: preset.VoiceModel,
+                speaker: speaker,
+                speed: speed,
+                sentenceSilence: silence);
 
             Log($"[ApplyPreset] Applied preset {index + 1} with Speed {speed}, Speaker {speaker}, VoiceModel {preset.VoiceModel}");
         }
@@ -2337,30 +2344,12 @@ namespace PiperTray
 
         private double GetSpeedValue(int index)
         {
-            switch (index)
+            int speedIndex = 10 - index;
+            if (speedIndex >= 0 && speedIndex < speedOptions.Length)
             {
-                case -9: return 2.0;
-                case -8: return 1.9;
-                case -7: return 1.8;
-                case -6: return 1.7;
-                case -5: return 1.6;
-                case -4: return 1.5;
-                case -3: return 1.4;
-                case -2: return 1.3;
-                case -1: return 1.2;
-                case 0: return 1.1;
-                case 1: return 1.0;
-                case 2: return 0.9;
-                case 3: return 0.8;
-                case 4: return 0.7;
-                case 5: return 0.6;
-                case 6: return 0.5;
-                case 7: return 0.4;
-                case 8: return 0.3;
-                case 9: return 0.2;
-                case 10: return 0.1;
-                default: return 1.0;
+                return speedOptions[speedIndex];
             }
+            return 1.0; // Default value if out of range
         }
 
         private int GetSpeedIndex(double speed)
@@ -2609,8 +2598,25 @@ namespace PiperTray
                 UpdateMainSettingsFromActivePreset(lines);
 
                 // Write updated settings to file
+                // Save current preset values with validation
+                if (app.TryGetCurrentPreset(out var currentPreset))
+                {
+                    if (double.TryParse(currentPreset.Speed, NumberStyles.Float, CultureInfo.InvariantCulture, out double speed))
+                    {
+                        app.SaveSettings(speed: speed);
+                        Log($"[SaveButton_Click] Saved speed: {speed}");
+                    }
+                    
+                    // Add similar validation/blocks for other settings
+                    app.SaveSettings(
+                        speaker: int.Parse(currentPreset.Speaker),
+                        sentenceSilence: float.Parse(currentPreset.SentenceSilence, CultureInfo.InvariantCulture),
+                        voiceModel: currentPreset.VoiceModel);
+                }
+                
                 File.WriteAllLines(configPath, lines);
-                Log($"[SaveButton_Click] Settings saved successfully");
+                Log($"[SaveButton_Click] Settings persisted successfully");
+                app.ReloadSettings(); // Ensure in-memory settings match config file
 
                 // Register hotkeys and update application state
                 app.RegisterHotkeys();
