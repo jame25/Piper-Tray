@@ -386,6 +386,9 @@ namespace PiperTray
                     settings.switchPresetVk,
                     settings.speaker,
                     settings.sentenceSilence);
+
+                UpdateSpeedFromSettings(settings.speed);
+
                 isInitializing = false;
 
                 Application.Run(this);
@@ -1183,31 +1186,66 @@ namespace PiperTray
             }
             return null;
         }
+public void SavePreset(int index, PresetSettings preset)
+{
+    if (isInitializing)
+    {
+        return;
+    }
 
-        public void SavePreset(int index, PresetSettings preset)
-        {
-            if (isInitializing)
-            {
-                return;
-            }
+    string configPath = GetConfigPath();
+    var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
 
-            string configPath = GetConfigPath();
-            var lines = File.Exists(configPath) ? File.ReadAllLines(configPath).ToList() : new List<string>();
+    // Include JsonSerializerOptions here
+    var options = new JsonSerializerOptions
+    {
+        IgnoreNullValues = false,
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString
+    };
 
-            // Include JsonSerializerOptions here
-            var options = new JsonSerializerOptions
-            {
-                IgnoreNullValues = false,
-                PropertyNameCaseInsensitive = true,
-                NumberHandling = JsonNumberHandling.AllowReadingFromString
-            };
+    string presetJson = JsonSerializer.Serialize(preset, options);
+    UpdateOrAddSetting(lines, $"Preset{index + 1}", presetJson);
+    File.WriteAllLines(configPath, lines);
+}
 
-            string presetJson = JsonSerializer.Serialize(preset, options);
-            UpdateOrAddSetting(lines, $"Preset{index + 1}", presetJson);
-            File.WriteAllLines(configPath, lines);
-        }
+public bool TryGetCurrentPreset(out PresetSettings preset)
+{
+    preset = null;
+    if (currentPresetIndex >= 0 && currentPresetIndex < 4)
+    {
+        preset = LoadPreset(currentPresetIndex);
+        return preset != null;
+    }
+    return false;
+}
 
-        private void InitializeClipboardMonitoring()
+public void ReloadSettings()
+{
+    var settings = ReadCurrentSettings();
+    if (settings.TryGetValue("VoiceModel", out string model) &&
+        settings.TryGetValue("Speed", out string speedStr) &&
+        settings.TryGetValue("Speaker", out string speakerStr) &&
+        settings.TryGetValue("SentenceSilence", out string silenceStr))
+    {
+        float speed = float.Parse(speedStr, CultureInfo.InvariantCulture);
+        int speaker = int.Parse(speakerStr);
+        float sentenceSilence = float.Parse(silenceStr, CultureInfo.InvariantCulture);
+
+        SaveSettings(
+            speed: speed,
+            voiceModel: model,
+            speaker: speaker,
+            sentenceSilence: sentenceSilence
+        );
+
+        // Update the speed display in the tray menu
+        UpdateSpeedFromSettings(speed);
+        UpdateSpeedDisplay();
+    }
+}
+
+    private void InitializeClipboardMonitoring()
         {
             clipboardTimer = new System.Windows.Forms.Timer();
             clipboardTimer.Interval = 1000;
@@ -1453,32 +1491,34 @@ namespace PiperTray
         {
             syncContext.Post(_ =>
             {
-
                 currentSpeed = newSpeed;
-                currentSpeedIndex = Array.IndexOf(speedOptions, newSpeed);
+                currentSpeedIndex = Array.FindIndex(speedOptions, s => Math.Abs(s - newSpeed) < 0.0001);
 
                 if (currentSpeedIndex == -1)
                 {
-                    currentSpeedIndex = speedOptions.Length - 1;
+                    // If the exact speed is not found, find the closest match
+                    double minDifference = double.MaxValue;
                     for (int i = 0; i < speedOptions.Length; i++)
                     {
-                        if (newSpeed >= speedOptions[i])
+                        double difference = Math.Abs(speedOptions[i] - newSpeed);
+                        if (difference < minDifference)
                         {
+                            minDifference = difference;
                             currentSpeedIndex = i;
-                            break;
                         }
                     }
                 }
 
                 UpdateSpeedDisplay();
-
             }, null);
         }
 
 
         private void UpdateSpeedDisplay()
         {
-            int displaySpeed = currentSpeedIndex - 10; // Convert index to display value (-9 to 10)
+            // Convert index to display value (-9 to 10)
+            // Since speedOptions array is reversed (2.0 to 0.1), we need to invert the index
+            int displaySpeed = -(currentSpeedIndex - 10);
 
             speedMenuItem.Text = $"Speed: {displaySpeed}";
 
