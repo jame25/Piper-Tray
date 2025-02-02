@@ -2755,25 +2755,64 @@ namespace PiperTray
 
         private bool ValidatePresetControls(int index)
         {
-            if (presetNameTextBoxes[index]?.IsHandleCreated != true ||
-                presetVoiceModelComboBoxes[index]?.IsHandleCreated != true ||
-                presetSpeakerComboBoxes[index]?.IsHandleCreated != true ||
-                presetSpeedComboBoxes[index]?.IsHandleCreated != true ||
-                presetSilenceNumericUpDowns[index]?.IsHandleCreated != true ||
-                presetEnableCheckBoxes[index]?.IsHandleCreated != true)
+            try
             {
-                Log($"[ValidatePresetControls] One or more controls not properly initialized for preset {index + 1}");
+                // First check if controls exist
+                if (presetNameTextBoxes[index] == null ||
+                    presetVoiceModelComboBoxes[index] == null ||
+                    presetSpeakerComboBoxes[index] == null ||
+                    presetSpeedComboBoxes[index] == null ||
+                    presetSilenceNumericUpDowns[index] == null ||
+                    presetEnableCheckBoxes[index] == null)
+                {
+                    Log($"[ValidatePresetControls] One or more controls are null for preset {index + 1}");
+                    return false;
+                }
+
+                // Force handle creation if needed
+                if (!presetNameTextBoxes[index].IsHandleCreated)
+                {
+                    presetNameTextBoxes[index].CreateControl();
+                }
+                if (!presetVoiceModelComboBoxes[index].IsHandleCreated)
+                {
+                    presetVoiceModelComboBoxes[index].CreateControl();
+                }
+                if (!presetSpeakerComboBoxes[index].IsHandleCreated)
+                {
+                    presetSpeakerComboBoxes[index].CreateControl();
+                }
+                if (!presetSpeedComboBoxes[index].IsHandleCreated)
+                {
+                    presetSpeedComboBoxes[index].CreateControl();
+                }
+                if (!presetSilenceNumericUpDowns[index].IsHandleCreated)
+                {
+                    presetSilenceNumericUpDowns[index].CreateControl();
+                }
+                if (!presetEnableCheckBoxes[index].IsHandleCreated)
+                {
+                    presetEnableCheckBoxes[index].CreateControl();
+                }
+
+                // Verify selections only if the preset is enabled
+                if (presetEnableCheckBoxes[index].Checked)
+                {
+                    if (presetVoiceModelComboBoxes[index].SelectedItem == null ||
+                        presetSpeakerComboBoxes[index].SelectedItem == null)
+                    {
+                        Log($"[ValidatePresetControls] Required selections missing for enabled preset {index + 1}");
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log($"[ValidatePresetControls] Exception validating preset {index + 1}: {ex.Message}");
                 return false;
             }
-
-            if (presetVoiceModelComboBoxes[index].SelectedItem == null ||
-                presetSpeakerComboBoxes[index].SelectedItem == null)
-            {
-                Log($"[ValidatePresetControls] Required selections missing for preset {index + 1}");
-                return false;
-            }
-
-            return true;
         }
 
         private bool ValidateSpeakerValue(string modelName, string speakerValue)
