@@ -1,7 +1,7 @@
 <p align="center"> <img width="256" height="256" src="https://github.com/jame25/Piper-Tray/assets/13631646/95cf62c7-9248-4195-864b-57771d922bd6"></p>
 
 
-Piper Tray is a small system tray utility for Windows, that utilizes [Piper](https://github.com/rhasspy/piper). It will read aloud the contents of your clipboard. You can stop the speech at any time via an assigned hotkey.
+Piper Tray is a small system tray utility for Windows, that utilizes [Piper](https://github.com/OHF-Voice/piper1-gpl). It will read aloud the contents of your clipboard. You can stop the speech at any time via an assigned hotkey.
 
 If you would prefer a GUI, check out my other project: [Piper Read](https://github.com/jame25/piper-read).
 
@@ -25,7 +25,7 @@ If you would prefer a GUI, check out my other project: [Piper Read](https://gith
 ## Install:
 
 - Download the latest version of Piper Tray from [releases](https://github.com/jame25/Piper-Tray/releases/).
-- Grab the latest Windows binary for Piper from [here](https://github.com/rhasspy/piper/releases). Voice models are available [here](https://huggingface.co/rhasspy/piper-voices/tree/main).
+- Grab the latest Windows binary for Piper from [here](https://github.com/OHF-Voice/piper1-gpl/releases). Voice models are available [here](https://huggingface.co/rhasspy/piper-voices/tree/main).
 - <b>Extract all of the above into the same directory</b>.
 
 ## Configuration:
