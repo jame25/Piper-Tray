@@ -25,7 +25,7 @@ If you would prefer a GUI, check out my other project: [Piper Read](https://gith
 ## Install:
 
 - Download the latest version of Piper Tray from [releases](https://github.com/jame25/Piper-Tray/releases/).
-- Grab the latest Windows binary for Piper from [here](https://github.com/OHF-Voice/piper1-gpl/releases). Voice models are available [here](https://huggingface.co/rhasspy/piper-voices/tree/main).
+- Grab the latest Windows binary for Piper from [here](https://github.com/rhasspy/piper/releases). Voice models are available [here](https://huggingface.co/rhasspy/piper-voices/tree/main).
 - <b>Extract all of the above into the same directory</b>.
 
 ## Configuration:
